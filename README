@@ -1,3 +1,11 @@
 To run the GPU version:
 
+Grab a GPU node on HPC:
+qsub -l walltime=10:00:00 -l gpus=1 -q isi -I
+
+Source Cuda:
+source /usr/usc/cuda/7.0/setup.sh
+
+Use the RNN_GPU executable!
+
 
