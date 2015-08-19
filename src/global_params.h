@@ -79,7 +79,7 @@ struct global_params {
 	int num_hypotheses = 1;//This prints out the k best paths from the beam decoder for the input
 	const precision min_decoding_ratio = 0.5; //target translation divided by source sentence length must be greater than min_decoding_ratio
 	const precision max_decoding_ratio = 1.5;
-	const bool print_score = false; //Whether to print the score of the hypotheses or not
+	bool print_score = false; //Whether to print the score of the hypotheses or not
 	std::string decode_tmp_file; //used for tmp stuff
 	std::string decode_file_name = "tmp/decoder_input.txt";
 	std::string decoder_output_file = "tmp/decoder_output.txt";
@@ -116,12 +116,12 @@ struct global_params {
 				std::cout << "Gradient Clipping Threshold (Norm Ball): " << norm_clip << std::endl;
 			}
 			std::cout << "Parameter initialization range (uniform): " << lower_range << " " << upper_range << "\n";
-			std::cout << "----------------------------------------------------------\n";
+			std::cout << "----------------------------------------------------------\n\n";
 			if(truncated_softmax) {
 				std::cout << "-------------------Truncated softmax info----------------------\n";
 				std::cout << "Shortlist Size: " << shortlist_size << std::endl;
 				std::cout << "Sampled Size: " << sampled_size << std::endl;
-				std::cout << "---------------------------------------------------------------\n";
+				std::cout << "---------------------------------------------------------------\n\n";
 			}
 		}
 		std::cout << "------------------------Model Info------------------------\n";
@@ -135,17 +135,17 @@ struct global_params {
 		std::cout << "Target Vocab Size: " << target_vocab_size << std::endl;
 		std::cout << "Number of Hidden Units: " << LSTM_size << std::endl;
 		std::cout << "Number of Hidden Layers: " << num_hidden_layers << std::endl;
-		std::cout << "---------------------------------------------------------------\n";
+		std::cout << "---------------------------------------------------------------\n\n";
 		if(decode) {
 			std::cout << "------------------------Decode Info------------------------\n";
 			std::cout << "Beam size for kbest: " << beam_size << "\n";
 			std::cout << "Number of paths for kbest: " << num_hypotheses << "\n";
-			std::cout << "------------------------------------------------------------\n";
+			std::cout << "------------------------------------------------------------\n\n";
 		}
 		if(stochastic_generation) {
 			std::cout << "------------------------Stoch Generation Info------------------------\n";
 			std::cout << "Number of tokens for stoch generation: " << sg_length << "\n";
-			std::cout << "------------------------------------------------------------\n";
+			std::cout << "------------------------------------------------------------\n\n";
 		}
 
 		//std::cout << "Number of Lines in Training File: " << train_num_lines_in_file << std::endl;

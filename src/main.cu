@@ -104,7 +104,9 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   			"FORMAT: <how many paths> <source file name> <neural network file name> <output file name>") 
   		("beam-size,b",po::value<int>(&params.beam_size),"Set beam size for kbest paths")
   		("penalty,p",po::value<precision>(&params.penalty),"Set penalty for kbest decoding. The value entered"\
-  			" will be added to the log probability score per target word decoded. This can make the model favor longer sentences for decoding");
+  			" will be added to the log probability score per target word decoded. This can make the model favor longer sentences for decoding")
+  		("print-score",po::value<bool>(&params.print_score),"Set if you want to print out the unnormalized log prob for each path "\
+  			"FORMAT: <bool> \nthe bool is 1 if you want to print the score or 0 otherwise. It is by default 0");
 
     po::variables_map vm; 
 

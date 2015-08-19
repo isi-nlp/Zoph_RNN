@@ -195,11 +195,18 @@ struct file_helper {
 			}
 		}
 
-	
 		for(int i=0; i < minibatch_size*current_target_length; i++) {
 			if(h_input_vocab_indicies_target[i] >= target_vocab_size) {
 				std::cerr << "ERROR BIGGER THAN MAX TARGET SIZE\n";
+				std::cerr << "Target sentence length: " << current_target_length << "\n";
 				std::cerr << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
+				exit (EXIT_FAILURE);
+			}
+			else if(h_input_vocab_indicies_target[i] < -1) {
+				std::cerr << "ERROR BIGGER THAN MAX TARGET SIZE\n";
+				std::cerr << "Target sentence length: " << current_target_length << "\n";
+				std::cerr << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
+				std::cout << "i= " << i << "\n";
 				exit (EXIT_FAILURE);
 			}
 

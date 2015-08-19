@@ -178,8 +178,8 @@ struct input_file_prep {
 
 
 		//remove last sentences that do not fit in the minibatch
-		if(source_len%minibatch_size!=0) {
-			int num_to_remove = source_len%minibatch_size;
+		if(data.size()%minibatch_size!=0) {
+			int num_to_remove = data.size()%minibatch_size;
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
@@ -404,7 +404,7 @@ struct input_file_prep {
 		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
 		std::cout << "Average source segment length: " << VISUAL_avg_source_seg_len<< "\n";
 		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 		//print file stats:
 		std::cout << "----------------------------target train file info-----------------------------\n";
 		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
@@ -414,7 +414,7 @@ struct input_file_prep {
 		std::cout << "Average target segment length: " << VISUAL_avg_target_seg_len<< "\n";
 		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff (source + target): " << VISUAL_num_tokens_thrown_away <<"\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 	}
 
 
@@ -493,8 +493,8 @@ struct input_file_prep {
 		}
 
 		//remove last sentences that do not fit in the minibatch
-		if(target_len%minibatch_size!=0) {
-			int num_to_remove = target_len%minibatch_size;
+		if(data.size()%minibatch_size!=0) {
+			int num_to_remove = data.size()%minibatch_size;
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
@@ -644,7 +644,7 @@ struct input_file_prep {
 		std::cout << "Average target segment length: " << VISUAL_avg_target_seg_len<< "\n";
 		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 	}
 
 
@@ -792,10 +792,9 @@ struct input_file_prep {
 		}	
 
 
-
-		if(target_len%minibatch_size!=0) {
+		if(data.size()%minibatch_size!=0) {
 			std::random_shuffle(data.begin(),data.end());
-			int num_to_remove = target_len%minibatch_size;
+			int num_to_remove = data.size()%minibatch_size;
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
@@ -923,14 +922,14 @@ struct input_file_prep {
 		std::cout << "Number of source word tokens: " << VISUAL_num_source_word_tokens <<"\n";
 		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
 		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 		//print file stats:
-		std::cout << "----------------------------target dev file info-----------------------------\n";
+		std::cout << "----------------------------target dev file info-----------------------------\n\n";
 		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
 		std::cout << "Number of target segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
 		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff (source + target): " << VISUAL_num_tokens_thrown_away <<"\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 	}
 
 
@@ -1031,9 +1030,9 @@ struct input_file_prep {
 		}
 
 
-		if(target_len%minibatch_size!=0) {
+		if(data.size()%minibatch_size!=0) {
 			std::random_shuffle(data.begin(),data.end());
-			int num_to_remove = target_len%minibatch_size;
+			int num_to_remove = data.size()%minibatch_size;
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
@@ -1256,7 +1255,7 @@ struct input_file_prep {
 		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
 		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
-		std::cout << "-------------------------------------------------------------------------------\n";
+		std::cout << "-------------------------------------------------------------------------------\n\n";
 
 
 	}
