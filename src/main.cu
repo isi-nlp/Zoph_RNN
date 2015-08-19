@@ -215,6 +215,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				params.target_file_name = train_files[1];
 				params.output_weight_file = train_files[2];
 
+				if(params.source_file_name == params.target_file_name) {
+					std::cout << "ERROR: do not use the same file for source and target data\n";
+					exit (EXIT_FAILURE);
+				}
+
 				input_file_prep input_helper;
 
 				input_helper.prep_files_train_nonLM(params.minibatch_size,params.longest_sent,
@@ -270,6 +275,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					}
 					params.dev_source_file_name = adaptive_learning_rate[0];
 					params.dev_target_file_name = adaptive_learning_rate[1];
+
+					if(params.dev_source_file_name == params.dev_target_file_name) {
+						std::cout << "ERROR: do not use the same file for source and target data\n";
+						exit (EXIT_FAILURE);
+					}
 
 					input_file_prep input_helper;
 
@@ -365,6 +375,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				params.target_file_name = test_files[1];
 				params.input_weight_file = test_files[2];
 				params.output_force_decode = test_files[3];
+
+				if(params.source_file_name == params.target_file_name) {
+					std::cout << "ERROR: do not use the same file for source and target data\n";
+					exit (EXIT_FAILURE);
+				}
 
 				input_file_prep input_helper;
 

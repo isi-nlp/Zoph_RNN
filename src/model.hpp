@@ -89,6 +89,7 @@ void neuralMT_model<dType>::initModel_decoding(int LSTM_size,int minibatch_size,
 	this->input_weight_file = input_weight_file;
 	this->output_weight_file = output_weight_file;
 	this->debug = debug;
+	this->LM = false;
 	zero_error.setZero(minibatch_size,LSTM_size);
 
 	init_GPUs();
