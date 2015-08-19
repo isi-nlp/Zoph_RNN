@@ -1,7 +1,7 @@
 This is Barret Zoph's code for an end-to-end neural MT system
 
 
-NOTES:
+NOTES (for me):
 - Always set device zero when leaving a global function that operates on all GPU's
 - each full layer (full layer is source+target) shares a cuBLAS handle and streams
 - d_h_t needs to be allocated in softmax in mulitGPU, memory address is simply shared in single GPU
@@ -10,11 +10,10 @@ NOTES:
 
 
 TODO/BUGS:
-- Truncated softmax perplexity is higher than train for the same files.... there is a bug
 - Make decoder use less memory by have only 1 node instead of some sentence threshold, same with perplexity
 
 
-File Input Format:
+File Input Format (under the hood not seen by user):
 - First line is the source input for the RNN
 - Second line is the source output for the RNN
 - First line is the target input for the RNN
@@ -22,25 +21,6 @@ File Input Format:
 - 0 in the source represents the <START> word
 - 0 in the target represents the <START> word
 - 1 in the target represents the <EOS> word (end of sentence)
-
-Scripting Files:
-- The scripting files work as follows:
-	- First the file must be sorted using ??????
-	- Then the integerize.py script will be run on the file
-	- Then pad.py will be run on the file to pad the data for my format
-
-
-NOTE DO NOT COPY THE OUTPUT VALIDATION FILES,
-Data Files (stride refers to grouping for random shuffle):
-
-
-
-
--------------------------DATA PROCESS INSTRUCTIONS-----------------------
-1. run setup_wrapper.sh with qsub. Put the options you want in the file
-Extra: If you need to split data into train/dev/test then un 
-
-
 
 
 SFTP:
@@ -52,12 +32,6 @@ put command
 
 Lower case script:
 tr '[:upper:]' '[:lower:]'
-
-
-
-Training Tips:
-- 
-
 
 
 
