@@ -73,6 +73,24 @@ struct input_file_prep {
 		bool shuffle,std::string model_output_file_name,int hiddenstate_size) 
 	{
 
+
+		int VISUAL_num_source_word_tokens =0;
+		int VISUAL_total_source_vocab_size=0;
+		int VISUAL_num_single_source_words=0;
+		int VISUAL_num_segment_pairs=0;
+		double VISUAL_avg_source_seg_len=0;
+		int VISUAL_source_longest_sent=0;
+
+
+		int VISUAL_num_target_word_tokens =0;
+		int VISUAL_total_target_vocab_size=0;
+		int VISUAL_num_single_target_words=0;
+		VISUAL_num_segment_pairs=0;
+		double VISUAL_avg_target_seg_len=0;
+		int VISUAL_target_longest_sent=0;
+
+		int VISUAL_num_tokens_thrown_away=0;
+
 		target_input.open(target_file_name.c_str());
 		final_output.open(output_file_name.c_str());
 		source_input.open(source_file_name.c_str());
@@ -98,6 +116,7 @@ struct input_file_prep {
 			target_len++;
 		}
 
+		VISUAL_num_segment_pairs = target_len;
 
 		//do check to be sure the two files are the same length
 		if(source_len!=target_len) {
@@ -131,11 +150,26 @@ struct input_file_prep {
 				tgt_sentence.push_back(word);
 			}
 
-			if( !(src_sentence.size()>=max_sent_cutoff || tgt_sentence.size()>=max_sent_cutoff) ) {
+			if( !(src_sentence.size()+1>=max_sent_cutoff-2 || tgt_sentence.size()+1>=max_sent_cutoff-2) ) {
 				data.push_back(comb_sent_info(src_sentence,tgt_sentence));
+				VISUAL_avg_source_seg_len+=src_sentence.size();
+				VISUAL_avg_target_seg_len+=tgt_sentence.size();
+				VISUAL_num_source_word_tokens+=src_sentence.size();
+				VISUAL_num_target_word_tokens+=tgt_sentence.size();
+
+				if(VISUAL_source_longest_sent < src_sentence.size()) {
+					VISUAL_source_longest_sent = src_sentence.size();
+				}
+				if(VISUAL_target_longest_sent < tgt_sentence.size()) {
+					VISUAL_target_longest_sent = tgt_sentence.size();
+				}
+			}
+			else {
+				VISUAL_num_tokens_thrown_away+=src_sentence.size() + tgt_sentence.size();
 			}
 		}
-
+		VISUAL_avg_source_seg_len = VISUAL_avg_source_seg_len/( (double)VISUAL_num_segment_pairs);
+		VISUAL_avg_target_seg_len = VISUAL_avg_target_seg_len/( (double)VISUAL_num_segment_pairs);
 
 		//shuffle the entire data
 		if(shuffle) {
@@ -149,6 +183,11 @@ struct input_file_prep {
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
+		}
+
+		if(data.size()==0) {
+			std::cout << "ERROR: file size is zero, could be wrong input file or all lines are above max sent length\n";
+			exit (EXIT_FAILURE);
 		}
 
 		//sort the data based on minibatch
@@ -187,18 +226,20 @@ struct input_file_prep {
 			}
 		}
 
-
 		//now use heap to get the highest source and target mappings
 		if(source_vocab_size==-1) {
-			source_vocab_size = src_counts.size();
+			source_vocab_size = src_counts.size()+2;
 		}
 		if(target_vocab_size==-1) {
-			target_vocab_size = tgt_counts.size();
+			target_vocab_size = tgt_counts.size()+3;
 		}
 
+		VISUAL_total_source_vocab_size = src_counts.size();
+		VISUAL_total_target_vocab_size = tgt_counts.size();
 
-		source_vocab_size = std::min(source_vocab_size,(int)src_counts.size());
-		target_vocab_size = std::min(target_vocab_size,(int)tgt_counts.size());
+
+		source_vocab_size = std::min(source_vocab_size,(int)src_counts.size()+2);
+		target_vocab_size = std::min(target_vocab_size,(int)tgt_counts.size()+3);
 
 		//output the model info to first line of output weights file
 		std::ofstream output_model;
@@ -211,10 +252,16 @@ struct input_file_prep {
 
 		for ( auto it = src_counts.begin(); it != src_counts.end(); ++it ) {
 			src_map_heap.push( mapping_pair(it->first,it->second) );
+			if(it->second==1) {
+				VISUAL_num_single_source_words++;
+			}
 		}
 
 		for ( auto it = tgt_counts.begin(); it != tgt_counts.end(); ++it ) {
 			tgt_map_heap.push( mapping_pair(it->first,it->second) );
+			if(it->second==1) {
+				VISUAL_num_single_target_words++;
+			}
 		}
 
 		output_model << "==========================================================\n";
@@ -348,6 +395,26 @@ struct input_file_prep {
 		final_output.close();
 		source_input.close();
 		target_input.close();
+
+		//print file stats:
+		std::cout << "----------------------------source train file info-----------------------------\n";
+		std::cout << "Number of source word tokens: " << VISUAL_num_source_word_tokens <<"\n";
+		std::cout << "Source vocabulary size (before <unk>ing): " << VISUAL_total_source_vocab_size<<"\n";
+		std::cout << "Number of source singleton word types: " << VISUAL_num_single_source_words<<"\n";
+		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Average source segment length: " << VISUAL_avg_source_seg_len<< "\n";
+		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
+		//print file stats:
+		std::cout << "----------------------------target train file info-----------------------------\n";
+		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
+		std::cout << "Target vocabulary size (before <unk>ing): " << VISUAL_total_target_vocab_size<<"\n";
+		std::cout << "Number of target singleton word types: " << VISUAL_num_single_target_words<<"\n";
+		std::cout << "Number of target segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Average target segment length: " << VISUAL_avg_target_seg_len<< "\n";
+		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
+		std::cout << "Total word tokens thrown out due to sentence cutoff (source + target): " << VISUAL_num_tokens_thrown_away <<"\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
 	}
 
 
@@ -358,6 +425,14 @@ struct input_file_prep {
 		bool shuffle,std::string model_output_file_name,int hiddenstate_size) 
 	{
 
+		int VISUAL_num_target_word_tokens =0;
+		int VISUAL_total_target_vocab_size=0;
+		int VISUAL_num_single_target_words=0;
+		int VISUAL_num_segment_pairs=0;
+		double VISUAL_avg_target_seg_len=0;
+		int VISUAL_longest_sent=0;
+
+		int VISUAL_num_tokens_thrown_away=0;
 
 		target_input.open(target_file_name.c_str());
 		final_output.open(output_file_name.c_str());
@@ -374,10 +449,15 @@ struct input_file_prep {
 			target_len++;
 		}
 
+		VISUAL_num_segment_pairs = target_len;
+
 		if(minibatch_size>target_len) {
 			std::cerr << "ERROR: minibatch size cannot be greater than the file size\n";
 			exit (EXIT_FAILURE);
 		}
+
+
+		double VISUAL_tmp_running_seg_len=0;
 
 		//filter any long sentences and get ready to shuffle
 		target_input.clear();
@@ -391,10 +471,20 @@ struct input_file_prep {
 			while(iss_tgt >> word) {
 				tgt_sentence.push_back(word);
 			}
-			if( !(src_sentence.size()>=max_sent_cutoff || tgt_sentence.size()>=max_sent_cutoff) ) {
+			if( !(src_sentence.size()+1>=max_sent_cutoff-2 || tgt_sentence.size() + 1>=max_sent_cutoff-2) ) {
 				data.push_back(comb_sent_info(src_sentence,tgt_sentence));
+				VISUAL_tmp_running_seg_len+=tgt_sentence.size();
+				VISUAL_num_target_word_tokens+=tgt_sentence.size();
+				if(tgt_sentence.size() > VISUAL_longest_sent) {
+					VISUAL_longest_sent = tgt_sentence.size() ;
+				}
+			}
+			else {
+				VISUAL_num_tokens_thrown_away+=src_sentence.size() + tgt_sentence.size();
 			}
 		}
+
+		VISUAL_avg_target_seg_len = VISUAL_tmp_running_seg_len/VISUAL_num_segment_pairs;
 
 
 		//shuffle the entire data
@@ -402,13 +492,17 @@ struct input_file_prep {
 			std::random_shuffle(data.begin(),data.end());
 		}
 
-
 		//remove last sentences that do not fit in the minibatch
 		if(target_len%minibatch_size!=0) {
 			int num_to_remove = target_len%minibatch_size;
 			for(int i=0; i<num_to_remove; i++) {
 				data.pop_back();
 			}
+		}
+
+		if(data.size()==0) {
+			std::cout << "ERROR: your dataset if of length zero\n";
+			exit (EXIT_FAILURE);
 		}
 
 		//sort the data based on minibatch
@@ -441,11 +535,12 @@ struct input_file_prep {
 
 		//now use heap to get the highest source and target mappings
 		if(target_vocab_size==-1) {
-			target_vocab_size = tgt_counts.size();
+			target_vocab_size = tgt_counts.size()+3;
 		}
 
+		VISUAL_total_target_vocab_size = tgt_counts.size();
 
-		target_vocab_size = std::min(target_vocab_size,(int)tgt_counts.size());
+		target_vocab_size = std::min(target_vocab_size,(int)tgt_counts.size()+3);
 
 		//output the model info to first line of output weights file
 		std::ofstream output_model;
@@ -456,6 +551,9 @@ struct input_file_prep {
 
 		for ( auto it = tgt_counts.begin(); it != tgt_counts.end(); ++it ) {
 			tgt_map_heap.push( mapping_pair(it->first,it->second) );
+			if(it->second==1) {
+				VISUAL_num_single_target_words++;
+			}
 		}
 
 		output_model << "==========================================================\n";
@@ -536,6 +634,17 @@ struct input_file_prep {
 
 		final_output.close();
 		target_input.close();
+
+		//print file stats:
+		std::cout << "----------------------------target train file info-------------------------\n";
+		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
+		std::cout << "Target vocabulary size (before <unk>ing): " << VISUAL_total_target_vocab_size<<"\n";
+		std::cout << "Number of target singleton word types: " << VISUAL_num_single_target_words<<"\n";
+		std::cout << "Number of target segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Average target segment length: " << VISUAL_avg_target_seg_len<< "\n";
+		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_longest_sent << "\n";
+		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
 	}
 
 
@@ -543,6 +652,18 @@ struct input_file_prep {
 	void integerize_file_nonLM(std::string output_weights_name,std::string source_file_name,std::string target_file_name,std::string tmp_output_name,
 		int max_sent_cutoff,int minibatch_size,int &hiddenstate_size,int &source_vocab_size,int &target_vocab_size) 
 	{
+
+		int VISUAL_num_source_word_tokens =0;
+		int VISUAL_num_segment_pairs=0;
+		int VISUAL_source_longest_sent=0;
+
+
+		int VISUAL_num_target_word_tokens =0;
+		VISUAL_num_segment_pairs=0;
+		int VISUAL_target_longest_sent=0;
+
+		int VISUAL_num_tokens_thrown_away=0;
+
 
 		std::ifstream weights_file;
 		weights_file.open(output_weights_name.c_str());
@@ -624,6 +745,7 @@ struct input_file_prep {
 			target_len++;
 		}
 
+		VISUAL_num_segment_pairs = target_len;
 
 		//do check to be sure the two files are the same length
 		if(source_len!=target_len) {
@@ -651,10 +773,24 @@ struct input_file_prep {
 				tgt_sentence.push_back(word);
 			}
 
-			if( !(src_sentence.size()>=max_sent_cutoff || tgt_sentence.size()>=max_sent_cutoff) ) {
+			if( !(src_sentence.size()+1>=max_sent_cutoff-2 || tgt_sentence.size()+1>=max_sent_cutoff-2) ) {
 				data.push_back(comb_sent_info(src_sentence,tgt_sentence));
+
+				VISUAL_num_source_word_tokens+=src_sentence.size();
+				VISUAL_num_target_word_tokens+=tgt_sentence.size();
+
+				if(VISUAL_source_longest_sent < src_sentence.size()) {
+					VISUAL_source_longest_sent = src_sentence.size();
+				}
+				if(VISUAL_target_longest_sent < tgt_sentence.size()) {
+					VISUAL_target_longest_sent = tgt_sentence.size();
+				}
 			}
-		}
+			else {
+				VISUAL_num_tokens_thrown_away+=src_sentence.size() + tgt_sentence.size();
+			}
+		}	
+
 
 
 		if(target_len%minibatch_size!=0) {
@@ -665,6 +801,10 @@ struct input_file_prep {
 			}
 		}
 
+		if(data.size()==0) {
+			std::cout << "ERROR: file size is zero, could be wrong input file or all lines are above max sent length\n";
+			exit (EXIT_FAILURE);
+		}
 
 		//now integerize
 		for(int i=0; i<data.size(); i++) {
@@ -776,14 +916,36 @@ struct input_file_prep {
 		final_output.close();
 		source_input.close();
 		target_input.close();
+
+
+		//print file stats:
+		std::cout << "----------------------------source dev file info-----------------------------\n";
+		std::cout << "Number of source word tokens: " << VISUAL_num_source_word_tokens <<"\n";
+		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
+		//print file stats:
+		std::cout << "----------------------------target dev file info-----------------------------\n";
+		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
+		std::cout << "Number of target segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
+		std::cout << "Total word tokens thrown out due to sentence cutoff (source + target): " << VISUAL_num_tokens_thrown_away <<"\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
 	}
 
 
 
 
 	void integerize_file_LM(std::string output_weights_name,std::string target_file_name,std::string tmp_output_name,
-		int max_sent_cutoff,int minibatch_size,bool dev,int &hiddenstate_size,int &target_vocab_size,bool kbest,int &source_vocab_size) 
+		int max_sent_cutoff,int minibatch_size,bool dev,int &hiddenstate_size,int &target_vocab_size) 
 	{
+
+
+		int VISUAL_num_target_word_tokens =0;
+		int VISUAL_num_segment_pairs=0;
+		int VISUAL_target_longest_sent=0;
+
+		int VISUAL_num_tokens_thrown_away=0;
 
 		std::ifstream weights_file;
 		weights_file.open(output_weights_name.c_str());
@@ -799,15 +961,12 @@ struct input_file_prep {
 		}
 
 		if(file_input_vec.size()!=3) {
-			//std::cout << "ERROR: Neural network file format has been corrupted\n";
-			//exit (EXIT_FAILURE);
+			std::cout << "ERROR: Neural network file format has been corrupted\n";
+			exit (EXIT_FAILURE);
 		}
 
 		hiddenstate_size = std::stoi(file_input_vec[1]);
 		target_vocab_size = std::stoi(file_input_vec[2]);
-		if(kbest) {
-			source_vocab_size = std::stoi(file_input_vec[3]);
-		}
 
 		//now get the target mappings
 		std::getline(weights_file, str); //get this line, since all equals
@@ -843,6 +1002,7 @@ struct input_file_prep {
 			target_len++;
 		}
 
+		VISUAL_num_segment_pairs = target_len;
 
 		target_input.clear();
 		target_input.seekg(0, std::ios::beg);
@@ -856,8 +1016,17 @@ struct input_file_prep {
 				tgt_sentence.push_back(word);
 			}
 
-			if( !(tgt_sentence.size()>=max_sent_cutoff) ) {
+			if( !(tgt_sentence.size()+1>=max_sent_cutoff-2) ) {
 				data.push_back(comb_sent_info(src_sentence,tgt_sentence));
+
+				VISUAL_num_target_word_tokens+=tgt_sentence.size();
+
+				if(VISUAL_target_longest_sent < tgt_sentence.size()) {
+					VISUAL_target_longest_sent = tgt_sentence.size();
+				}
+			}
+			else {
+				VISUAL_num_tokens_thrown_away+=src_sentence.size() + tgt_sentence.size();
 			}
 		}
 
@@ -870,6 +1039,10 @@ struct input_file_prep {
 			}
 		}
 
+		if(data.size()==0) {
+			std::cout << "ERROR: file size is zero, could be wrong input file or all lines are above max sent length\n";
+			exit (EXIT_FAILURE);
+		}
 
 		//now integerize
 		for(int i=0; i<data.size(); i++) {
@@ -883,11 +1056,6 @@ struct input_file_prep {
 				else {
 					tgt_int.push_back(tgt_mapping[data[i].tgt_sent[j]]);
 				}	
-			}
-
-			//reverse if kbest
-			if(kbest) {
-				std::reverse(tgt_int.begin(),tgt_int.end());
 			}
 
 			data[i].tgt_sent.clear();
@@ -922,10 +1090,8 @@ struct input_file_prep {
 
 		for(int i=0; i<data.size(); i++) {
 
-			if(!kbest) {
-				final_output << "\n";
-				final_output << "\n";
-			}
+			final_output << "\n";
+			final_output << "\n";
 
 			for(int j=0; j<data[i].tgt_sent_int_i.size(); j++) {
 				final_output << data[i].tgt_sent_int_i[j];
@@ -935,21 +1101,164 @@ struct input_file_prep {
 			}
 			final_output << "\n";
 
-			if(!kbest) {
-				for(int j=0; j<data[i].tgt_sent_int_o.size(); j++) {
-					final_output << data[i].tgt_sent_int_o[j];
-					if(j!=data[i].tgt_sent_int_o.size()) {
-						final_output << " ";
-					}
+
+			for(int j=0; j<data[i].tgt_sent_int_o.size(); j++) {
+				final_output << data[i].tgt_sent_int_o[j];
+				if(j!=data[i].tgt_sent_int_o.size()) {
+					final_output << " ";
 				}
-				final_output << "\n";
 			}
+			final_output << "\n";
 		}
 
 
 		weights_file.close();
 		final_output.close();
 		target_input.close();
+
+		std::cout << "----------------------------target dev file info-----------------------------\n";
+		std::cout << "Number of target word tokens: " << VISUAL_num_target_word_tokens <<"\n";
+		std::cout << "Number of target segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
+		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
+	}
+
+	void integerize_file_kbest(std::string output_weights_name,std::string source_file_name,std::string tmp_output_name,
+		int max_sent_cutoff,int &hiddenstate_size,int &target_vocab_size,int &source_vocab_size) 
+	{
+
+
+		int VISUAL_num_source_word_tokens =0;
+		int VISUAL_num_segment_pairs=0;
+		int VISUAL_source_longest_sent=0;
+
+		int VISUAL_num_tokens_thrown_away=0;
+
+		std::ifstream weights_file;
+		weights_file.open(output_weights_name.c_str());
+
+		std::vector<std::string> file_input_vec;
+		std::string str;
+		std::string word;
+
+		std::getline(weights_file, str);
+		std::istringstream iss(str, std::istringstream::in);
+		while(iss >> word) {
+			file_input_vec.push_back(word);
+		}
+
+		if(file_input_vec.size()!=4) {
+			std::cout << "ERROR: Neural network file format has been corrupted\n";
+			exit (EXIT_FAILURE);
+		}
+
+		hiddenstate_size = std::stoi(file_input_vec[1]);
+		target_vocab_size = std::stoi(file_input_vec[2]);
+		source_vocab_size = std::stoi(file_input_vec[3]);
+
+		//now get the source mappings
+		std::getline(weights_file, str); //get this line, since all equals
+		while(std::getline(weights_file, str)) {
+			int tmp_index;
+
+			if(str.size()>3 && str[0]=='=' && str[1]=='=' && str[2]=='=') {
+				break; //done with target mapping
+			}
+
+			std::istringstream iss(str, std::istringstream::in);
+			iss >> word;
+			tmp_index = std::stoi(word);
+			iss >> word;
+			src_mapping[word] = tmp_index;
+		}
+
+		//now that we have the mappings, integerize the file
+		std::ofstream final_output;
+		final_output.open(tmp_output_name.c_str());
+		std::ifstream source_input;
+		source_input.open(source_file_name.c_str());
+
+		//first get the number of lines the the files and check to be sure they are the same
+		int source_len = 0;
+		std::string src_str;
+
+		source_input.clear();
+
+		source_input.seekg(0, std::ios::beg);
+		while(std::getline(source_input, src_str)) {
+			source_len++;
+		}
+
+		VISUAL_num_segment_pairs = source_len;
+
+		source_input.clear();
+		source_input.seekg(0, std::ios::beg);
+		for(int i=0; i<source_len; i++) {
+			std::vector<std::string> src_sentence;
+			std::vector<std::string> tgt_sentence;
+			std::getline(source_input, src_str);
+
+			std::istringstream iss_src(src_str, std::istringstream::in);
+			while(iss_src>> word) {
+				src_sentence.push_back(word);
+			}
+
+			std::reverse(src_sentence.begin(),src_sentence.end());
+			if( !(src_sentence.size()+1>=max_sent_cutoff-2) ) {
+				data.push_back(comb_sent_info(src_sentence,tgt_sentence));
+				VISUAL_num_source_word_tokens+=src_sentence.size();
+				if(VISUAL_source_longest_sent < src_sentence.size()) {
+					VISUAL_source_longest_sent = src_sentence.size();
+				}
+			}
+			else {
+				VISUAL_num_tokens_thrown_away+=src_sentence.size() + tgt_sentence.size();
+			}
+		}
+
+		//now integerize
+		for(int i=0; i<data.size(); i++) {
+			std::vector<int> src_int;
+
+			for(int j=0; j<data[i].src_sent.size(); j++) {
+				if(src_mapping.count(data[i].src_sent[j])==0) {
+					//tgt_int.push_back(target_vocab_size-1);
+					src_int.push_back(src_mapping["<UNK>"]);
+				}
+				else {
+					src_int.push_back(src_mapping[data[i].src_sent[j]]);
+				}	
+			}
+
+			data[i].src_sent.clear();
+			data[i].src_sent_int= src_int;
+			data[i].src_sent_int.insert(data[i].src_sent_int.begin(),0);
+		}
+
+		for(int i=0; i<data.size(); i++) {
+			for(int j=0; j<data[i].src_sent_int.size(); j++) {
+				final_output << data[i].src_sent_int[j];
+				if(j!=data[i].src_sent_int.size()) {
+					final_output << " ";
+				}
+			}
+			final_output << "\n";
+		}
+
+
+		weights_file.close();
+		final_output.close();
+		source_input.close();
+
+		std::cout << "----------------------------source kbest file info-----------------------------\n";
+		std::cout << "Number of source word tokens: " << VISUAL_num_source_word_tokens <<"\n";
+		std::cout << "Number of source segment pairs (lines in training file): " << VISUAL_num_segment_pairs<<"\n";
+		std::cout << "Longest source segment (after removing long sentences for training): " << VISUAL_source_longest_sent << "\n";
+		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
+		std::cout << "-------------------------------------------------------------------------------\n";
+
+
 	}
 
 	//need outputweights to get the int mapping

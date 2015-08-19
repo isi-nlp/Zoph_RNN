@@ -107,7 +107,7 @@ struct file_helper {
 		zero_bitmaps();
 		resevoir_mapping.clear();
 
-		std::cout << "Shortlist size: " << shortlist_size << "\n";
+		//std::cout << "Shortlist size: " << shortlist_size << "\n";
 
 
 		int curr_index = 0;
@@ -120,8 +120,8 @@ struct file_helper {
 			}
 		}
 		len_unique_words_trunc_softmax =curr_index;
-		std::cout << "len_unique_words_trunc_softmax: " << len_unique_words_trunc_softmax << "\n";
-		std::cout << "len of W grad target: " << len_target_Wgrad << "\n";
+		//std::cout << "len_unique_words_trunc_softmax: " << len_unique_words_trunc_softmax << "\n";
+		//std::cout << "len of W grad target: " << len_target_Wgrad << "\n";
 
 		if(curr_index > sampled_size) {
 			std::cout << "ERROR: the sample size of the truncated softmax is too small\n";
@@ -154,12 +154,12 @@ struct file_helper {
 		}
 
 		//get the mappings
-		std::cout << "The samples:\n";
+		//std::cout << "The samples:\n";
 		for(int i=0; i<sampled_size; i++) {
-			std::cout << h_sampled_indices[i] << " ";
+			//std::cout << h_sampled_indices[i] << " ";
 			resevoir_mapping[h_sampled_indices[i]] = i;
 		}
-		std::cout << "\n";
+		//std::cout << "\n";
 
 		for(int i=0; i< minibatch_size*current_target_length; i++) {
 
@@ -195,7 +195,14 @@ struct file_helper {
 			}
 		}
 
+	
 		for(int i=0; i < minibatch_size*current_target_length; i++) {
+			if(h_input_vocab_indicies_target[i] >= target_vocab_size) {
+				std::cerr << "ERROR BIGGER THAN MAX TARGET SIZE\n";
+				std::cerr << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
+				exit (EXIT_FAILURE);
+			}
+
 
 			if(h_input_vocab_indicies_target[i]==-1) {
 				h_input_vocab_indicies_target_Wgrad[i] = -1;
@@ -208,6 +215,7 @@ struct file_helper {
 				h_input_vocab_indicies_target_Wgrad[i] = -1;
 			}
 		}
+		
 
 
 		//source

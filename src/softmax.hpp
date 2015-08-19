@@ -121,10 +121,10 @@ void softmax_layer<dType>::prep_trunc(int *h_sampled_indices,int len_unique_word
 	cudaMemcpy(d_truncated_vocab_mapping, h_sampled_indices, sampled_size*sizeof(int), cudaMemcpyHostToDevice);
 	shortlist_size_plus = shortlist_size + len_unique_words_trunc_softmax;
 
-	std::cout << "sample correction: " <<sample_correction << "\n";
-	std::cout << "shortlist size:"  << shortlist_size << "\n";
-	std::cout << "sampled size: " << sampled_size << "\n";
-	std::cout << "shortlist plus: " << shortlist_size_plus << "\n";
+	// std::cout << "sample correction: " <<sample_correction << "\n";
+	// std::cout << "shortlist size:"  << shortlist_size << "\n";
+	// std::cout << "sampled size: " << sampled_size << "\n";
+	// std::cout << "shortlist plus: " << shortlist_size_plus << "\n";
 
 	trunc_set_D<<<256,256>>>(d_D,d_subset_D,trunc_size,output_vocab_size,shortlist_size,d_truncated_vocab_mapping,LSTM_size);
 	CUDA_GET_LAST_ERROR("trunc_set_D");

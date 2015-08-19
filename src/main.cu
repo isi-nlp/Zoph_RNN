@@ -75,22 +75,28 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   			"FORMAT: (if sequence): <target file name> <trained neural network file name> <output file name>")
   		("stoch-gen,g", po::value<std::vector<std::string> > (&stoicgen_files)->multitoken(),"Do random generation for a sequence model, such as a language model\n"\
   			"FORMAT: <neural network file name> <output file name>")
-  		("stoch-gen-len",po::value<int>(&params.sg_length) ,"How many tokens to let stoch-gen run for")
+  		("stoch-gen-len",po::value<int>(&params.sg_length) ,"How many tokens to let stoch-gen run for"\
+  			"FORMAT: <neural network file name> <output file name>")
   		("sequence,s", "Train model that learns a sequence,such as language modeling. Default model is sequence to sequence model")
   		("learning-rate,l",po::value<precision>(&params.learning_rate),"Set learning rate")
   		("longest-sent,L",po::value<int>(&params.longest_sent),"Set the maximum sentence length for training.")
   		("hiddenstate-size,H",po::value<int>(&params.LSTM_size),"Set hiddenstate size")
-  		("truncated-softmax,T",po::value<int>(&params.LSTM_size),"Set hiddenstate size\n"\
+  		("truncated-softmax,T",po::value<std::vector<std::string>> (&trunc_info)->multitoken(),"Use truncated softmax\n"\
   			"FORMAT: <shortlist size> <sampled size>")
   		("source-vocab,v",po::value<int>(&params.source_vocab_size),"Set source vocab size")
   		("target-vocab,V",po::value<int>(&params.target_vocab_size),"Set target vocab size")
   		("shuffle",po::value<bool>(&params.shuffle),"true if you want to shuffle the train data")
-  		("parameter-range,p",po::value<std::vector<precision> > (&lower_upper_range)->multitoken(),"parameter initialization range")
+  		("parameter-range,P",po::value<std::vector<precision> > (&lower_upper_range)->multitoken(),"parameter initialization range\n"\
+  			"FORMAT: <Lower range value> <Upper range value>")
   		("number-epochs,n",po::value<int>(&params.num_epochs),"Set number of epochs")
   		("clip-gradients,c",po::value<precision>(&params.norm_clip),"Set gradient clipping threshold")
-  		("adaptive-halve-lr",po::value<std::vector<std::string>> (&adaptive_learning_rate)->multitoken(),"Halve the learning rate"\
-  			" when the perplexity on your specified dev set decreases from the previous half epoch\n"\
-  			"FORMAT:")
+  		("adaptive-halve-lr",po::value<std::vector<std::string>> (&adaptive_learning_rate)->multitoken(),"change the learning rate"\
+  			" when the perplexity on your specified dev set decreases from the previous half epoch by some constant, so "\
+  			" new_learning_rate = constant*old_learning rate, by default the constant is 0.5, but can be set using adaptive-decrease-factor\n"
+  			"FORMAT: (if sequence to sequence): <source dev file name> <target dev file name>\n"\
+  			"FORMAT: (if sequence): <target dev file name>")
+  		("adaptive-decrease-factor",po::value<precision>(&params.decrease_factor),"To be used with adaptive-halve-lr"\
+  			" it")
   		("fixed-halve-lr",po::value<int> (&params.epoch_to_start_halving),"Halve the learning rate"\
   			" after a certain epoch, every half epoch afterwards by a specific amount")
   		("minibatch-size,m",po::value<int>(&params.minibatch_size),"Set minibatch size")
@@ -171,12 +177,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			if(params.num_epochs<=0) {
 				std::cout << "ERROR: you cannot have num_epochs <=0\n";
 				exit (EXIT_FAILURE);
-			}
-
-			if(vm.count("truncated-softmax")) {
-				params.shortlist_size = std::stoi(trunc_info[0]);
-				params.sampled_size = std::stoi(trunc_info[1]);
-				params.truncated_softmax = true;
 			}
 
 
@@ -260,7 +260,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					input_file_prep input_helper;
 
 					input_helper.integerize_file_LM(params.output_weight_file,params.dev_target_file_name,"tmp/validation.txt",
-						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size,false,params.source_vocab_size); 
+						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size); 
 
 				}
 				else {
@@ -276,6 +276,16 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					input_helper.integerize_file_nonLM(params.output_weight_file,params.dev_source_file_name,
 						params.dev_target_file_name,"tmp/validation.txt",
 						params.longest_sent,params.minibatch_size,params.LSTM_size,params.source_vocab_size,params.target_vocab_size);
+				}
+			}
+
+			if(vm.count("truncated-softmax")) {
+				params.shortlist_size = std::stoi(trunc_info[0]);
+				params.sampled_size = std::stoi(trunc_info[1]);
+				params.truncated_softmax = true;
+				if(params.shortlist_size + params.sampled_size > params.target_vocab_size) {
+					std::cout << "ERROR: you cannot have shortlist size + sampled size >= target vocab size\n";
+					exit (EXIT_FAILURE);
 				}
 			}
 
@@ -302,8 +312,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 			input_file_prep input_helper;
 
-			input_helper.integerize_file_LM(params.input_weight_file,params.decode_tmp_file,"tmp/decoder_input.txt",
-				params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,true,params.source_vocab_size);
+			// input_helper.integerize_file_LM(params.input_weight_file,params.decode_tmp_file,"tmp/decoder_input.txt",
+			// 	params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,true,params.source_vocab_size);
+
+			input_helper.integerize_file_kbest(params.input_weight_file,params.decode_tmp_file,"tmp/decoder_input.txt",
+				params.longest_sent,params.LSTM_size,params.target_vocab_size,params.source_vocab_size);
 
 			if(params.beam_size<=0) {
 				std::cout << "ERROR: beam size cannot be <=0\n";
@@ -337,7 +350,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				input_file_prep input_helper;
 
 				input_helper.integerize_file_LM(params.input_weight_file,params.target_file_name,"tmp/validation.txt",
-					params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,false,params.source_vocab_size);
+					params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size);
 
 			}
 			else {
@@ -415,6 +428,8 @@ void command_line_parse(global_params &params,int argc, char **argv) {
     }
 }
 
+#include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/path.hpp>
 
 int main(int argc, char **argv) {
 
@@ -424,6 +439,15 @@ int main(int argc, char **argv) {
 	std::chrono::duration<double> elapsed_seconds;
 
     start_total = std::chrono::system_clock::now();
+
+    //create tmp directory if it does not exist already
+	if( !(boost::filesystem::exists("tmp/")))
+	{
+	    std::cout << "Creating tmp directory for program\n";
+	    boost::filesystem::create_directory("tmp/");
+	}
+
+
 
     //Initializing the model
 	global_params params; //Declare all of the global parameters
@@ -459,7 +483,7 @@ int main(int argc, char **argv) {
 	if(params.train) {
 		//info for averaging the speed
 		int curr_batch_num_SPEED = 0;
-		const int thres_batch_num_SPEED = 5;//set this to whatever
+		const int thres_batch_num_SPEED = 10;//set this to whatever
 		int total_words_batch_SPEED = 0;
 		double total_batch_time_SPEED = 0;
 
@@ -546,11 +570,11 @@ int main(int argc, char **argv) {
 			if(params.google_learning_rate && current_epoch>=params.epoch_to_start_halving && total_words>=params.half_way_count &&
 				learning_rate_flag) {
 					temp_learning_rate = temp_learning_rate/2;
-					std::cout << "HALVING LEARNING RATE: " << temp_learning_rate << "\n";
+					std::cout << "New Learning Rate: " << temp_learning_rate << "\n";
 					model.update_learning_rate(temp_learning_rate);
 					learning_rate_flag = false;
 					if(params.HPC_output) {
-						HPC_output << "HALVING LEARNING RATE: " << temp_learning_rate << "\n";
+						HPC_output << "New Learning Rate: " << temp_learning_rate << "\n";
 						HPC_output.flush();
 					}
 			}
@@ -570,9 +594,9 @@ int main(int argc, char **argv) {
 				if ( (new_perplexity + params.margin >= old_perplexity) && current_epoch!=1) {
 					temp_learning_rate = temp_learning_rate*params.decrease_factor;
 					model.update_learning_rate(temp_learning_rate);
-					std::cout << "Halving learning rate!\n\n";
+					std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
 					if(params.HPC_output) {
-						HPC_output << "Halving learning rate!\n\n";
+						HPC_output << "New learning rate:" << temp_learning_rate <<"\n\n";
 						HPC_output.flush();
 					}
 				}
@@ -584,11 +608,11 @@ int main(int argc, char **argv) {
 				//stuff for google learning rate schedule
 				if(params.google_learning_rate && current_epoch>=params.epoch_to_start_halving) {
 					temp_learning_rate = temp_learning_rate/2;
-					std::cout << "HALVING LEARNING RATE: " << temp_learning_rate << "\n";
+					std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
 					model.update_learning_rate(temp_learning_rate);
 					learning_rate_flag = true;
 					if(params.HPC_output) {
-						HPC_output << "HALVING LEARNING RATE: " << temp_learning_rate << "\n";
+						HPC_output << "New learning rate:" << temp_learning_rate <<"\n\n";
 						HPC_output.flush();
 					}
 				}
@@ -608,13 +632,13 @@ int main(int argc, char **argv) {
 						HPC_output.flush();
 					}
 					if ( (new_perplexity + params.margin >= old_perplexity) && current_epoch!=1) {
-						std::cout << "Halving learning rate!\n\n";
 						if(params.HPC_output) {
-							HPC_output << "Halving learning rate!\n\n";
+							HPC_output << "New learning rate:" << temp_learning_rate <<"\n\n";
 							HPC_output.flush();
 						}
 						temp_learning_rate = temp_learning_rate*params.decrease_factor;
 						model.update_learning_rate(temp_learning_rate);
+						std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
 					}
 					learning_rate_flag = true;
 					old_perplexity = new_perplexity;

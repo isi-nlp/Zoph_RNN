@@ -53,6 +53,7 @@ void readMatrix(const Eigen::MatrixBase<Derived> &matrixConst,std::ifstream &inp
 			//std::string temp_token;
 			iss_input >> temp_token;
 			//std::cout << temp_token << "\n";
+			//std::cout << temp_token << "\n";
 			matrixUnconst(i,j) = std::stod(temp_token);
 		}
 	}

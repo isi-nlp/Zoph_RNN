@@ -620,7 +620,7 @@ double neuralMT_model<dType>::get_perplexity(std::string test_file_name,int mini
 	//std::cout << "Perplexity CPU : " << perplexity << std::endl;
 	std::cout <<  std::setprecision(15) << "Perplexity dev set: " << perplexity_GPU << std::endl;
 	std::cout <<  std::setprecision(15) << "P_data dev set: " << P_data_GPU << std::endl;
-	fd_stream << perplexity_GPU << "\n";
+	//fd_stream << perplexity_GPU << "\n";
 	if(HPC_output_flag) {
 		HPC_output <<  std::setprecision(15) << "P_data: " << P_data_GPU << std::endl;
 		HPC_output <<  std::setprecision(15) << "Perplexity dev set: " << perplexity_GPU << std::endl;
@@ -731,6 +731,11 @@ void neuralMT_model<dType>::beam_decoder(int beam_size,std::string input_file_na
 	//initialize stuff special to decoder
 	input_layer_target.temp_swap_vals.resize(LSTM_size,beam_size); //used for changing hidden and cell state columns
 
+	if(target_vocab_size<=20 || beam_size >= target_vocab_size) {
+		std::cout << "Beam size reset to one because of small target vocab: " << beam_size << "\n";
+		beam_size = 1;
+	}
+
 	file_helper_decoder fileh(input_file_name,num_lines_in_file,longest_sent);
 	const int start_symbol =0;
 	const int end_symbol =1;
@@ -776,7 +781,6 @@ void neuralMT_model<dType>::beam_decoder(int beam_size,std::string input_file_na
 
 		cudaMemcpy(d_input_vocab_indicies_source,fileh.h_input_vocab_indicies_source,fileh.sentence_length*sizeof(int),cudaMemcpyHostToDevice);
 		decoder_forward_prop_source(fileh.minibatch_tokens_source_input,d_input_vocab_indicies_source,d_ones);
-
 		//now run the decoder on the target side
 		d.init_decoder();
 		int last_index =0;
@@ -817,8 +821,9 @@ void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_
 	//always load for stoic generation
 	load_weights();
 
-	std::cout << "\n--------------Starting stoicastic generation-------------\n";
+	std::cout << "\n--------------Starting stochastic generation-------------\n";
 
+	BZ_CUDA::gen.seed(static_cast<unsigned int>(std::time(0)));
 	//file stuff
 	std::ofstream ofs;
 	ofs.open(output_file_name.c_str());;
@@ -874,6 +879,11 @@ void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_
 		softmax.backprop_prep_GPU(sg_node.d_h_t,NULL,NULL,NULL);
 		h_current_index[0] = softmax.stoic_generation(h_outputdist,d_outputdist);
 		ofs << h_current_index[0] << " ";
+		if(h_current_index[0]==1) {
+			//clear hidden state because end of file
+			cudaMemset(sg_node.d_h_t,0,softmax.LSTM_size*1*sizeof(dType));
+			cudaMemset(sg_node.d_c_t,0,softmax.LSTM_size*1*sizeof(dType));
+		}
 		cudaMemcpy(d_current_index, h_current_index, 1*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_h_t_prev,sg_node.d_h_t,softmax.LSTM_size*1*sizeof(dType),cudaMemcpyDeviceToDevice);
 		cudaMemcpy(d_c_t_prev,sg_node.d_c_t,softmax.LSTM_size*1*sizeof(dType),cudaMemcpyDeviceToDevice);

@@ -24,7 +24,7 @@ struct global_params {
 
 
 	//Model training info
-	int minibatch_size = 1; //Size of the minibatch
+	int minibatch_size = 128; //Size of the minibatch
 	int num_epochs = 10; //Number passes through the dataset
 	precision learning_rate = 0.7; //The learning rate for SGD
 
@@ -57,8 +57,8 @@ struct global_params {
 	//the truncated softmax
 	//top_fixed + sampled = target vocabulary
 	bool truncated_softmax =false;
-	int shortlist_size = 7;
-	int sampled_size = 5;
+	int shortlist_size = 10000;
+	int sampled_size = 5000;
 
 	//gradient update parameters
 	bool clip_gradient = true;
@@ -69,7 +69,7 @@ struct global_params {
 	//vocab size of -1 defaults to the size of the train file specified
 	int source_vocab_size = -1;
 	int target_vocab_size = -1; //Size in input vocabulary, ranging from 0-input_vocab_size, where 0 is start symbol
-	int LSTM_size = 100; //LSTM cell size, by definition it is the same as the word embedding layer
+	int LSTM_size = 1000; //LSTM cell size, by definition it is the same as the word embedding layer
 	const int num_hidden_layers = 1; //This is the number of stacked LSTM's in the model
 
 
@@ -108,13 +108,15 @@ struct global_params {
 	void printIntroMessage() {
 
 		if(train) {
-			std::cout << "\n\nParameters settings for the model\n";
+			std::cout << "\n\n------------------------Train Info------------------------\n";
 			std::cout << "Minibatch Size: " << minibatch_size << std::endl;
 			std::cout << "Number of Epochs: " << num_epochs << std::endl;
 			std::cout << "Learning Rate: " << learning_rate << std::endl;
 			if(clip_gradient) {
 				std::cout << "Gradient Clipping Threshold (Norm Ball): " << norm_clip << std::endl;
 			}
+			std::cout << "Parameter initialization range (uniform): " << lower_range << " " << upper_range << "\n";
+			std::cout << "----------------------------------------------------------\n";
 			if(truncated_softmax) {
 				std::cout << "-------------------Truncated softmax info----------------------\n";
 				std::cout << "Shortlist Size: " << shortlist_size << std::endl;
@@ -122,25 +124,28 @@ struct global_params {
 				std::cout << "---------------------------------------------------------------\n";
 			}
 		}
-		std::cout << "Source Vocab Size: " << source_vocab_size << std::endl;
-		std::cout << "Target Vocab Size: " << target_vocab_size << std::endl;
-		std::cout << "Number of Hidden Units: " << LSTM_size << std::endl;
-		std::cout << "Number of Hidden Layers: " << num_hidden_layers << std::endl;
-		if(decode) {
-			std::cout << "Beam size for kbest: " << beam_size << "\n";
-			std::cout << "Number of paths for kbest: " << num_hypotheses << "\n";
-		}
-		if(stochastic_generation) {
-			std::cout << "Number of tokens for stoic generation: " << sg_length << "\n";
-		}
+		std::cout << "------------------------Model Info------------------------\n";
 		if(LM) {
 			std::cout << "Sequence model\n";
 		}
 		else {
 			std::cout << "Sequence to sequence model\n";
 		}
-		if(truncated_softmax) {
-			std::cout << "Truncated softmax is being used\n";
+		std::cout << "Source Vocab Size: " << source_vocab_size << std::endl;
+		std::cout << "Target Vocab Size: " << target_vocab_size << std::endl;
+		std::cout << "Number of Hidden Units: " << LSTM_size << std::endl;
+		std::cout << "Number of Hidden Layers: " << num_hidden_layers << std::endl;
+		std::cout << "---------------------------------------------------------------\n";
+		if(decode) {
+			std::cout << "------------------------Decode Info------------------------\n";
+			std::cout << "Beam size for kbest: " << beam_size << "\n";
+			std::cout << "Number of paths for kbest: " << num_hypotheses << "\n";
+			std::cout << "------------------------------------------------------------\n";
+		}
+		if(stochastic_generation) {
+			std::cout << "------------------------Stoch Generation Info------------------------\n";
+			std::cout << "Number of tokens for stoch generation: " << sg_length << "\n";
+			std::cout << "------------------------------------------------------------\n";
 		}
 
 		//std::cout << "Number of Lines in Training File: " << train_num_lines_in_file << std::endl;
