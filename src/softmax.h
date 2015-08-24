@@ -167,7 +167,7 @@ public:
 
 	void get_perplexity_GPU(); 
 
-	int stoic_generation(dType *h_outputdist,dType *d_outputdist);
+	int stoic_generation(dType *h_outputdist,dType *d_outputdist,double temperature);
 
 	//For softmax calculation
 	template <typename Derived>
@@ -233,6 +233,7 @@ public:
 	void backprop_prep_GPU(dType *d_h_t,int *d_output_vocab_indices_single,int *d_output_vocab_indices_01_single,
 		dType *d_output_vocab_indices_01_float_single);
 
+	void dump_probs(std::ofstream &LSTM_dump_stream);
 };
 
 #endif

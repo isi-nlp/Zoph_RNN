@@ -67,7 +67,7 @@ struct input_file_prep {
 	std::vector<comb_sent_info> data; //can be used to sort by mult of minibatch
 
 
-	void prep_files_train_nonLM(int minibatch_size,int max_sent_cutoff,
+	bool prep_files_train_nonLM(int minibatch_size,int max_sent_cutoff,
 		std::string source_file_name,std::string target_file_name,
 		std::string output_file_name,int &source_vocab_size,int &target_vocab_size,
 		bool shuffle,std::string model_output_file_name,int hiddenstate_size) 
@@ -90,6 +90,7 @@ struct input_file_prep {
 		int VISUAL_target_longest_sent=0;
 
 		int VISUAL_num_tokens_thrown_away=0;
+
 
 		target_input.open(target_file_name.c_str());
 		final_output.open(output_file_name.c_str());
@@ -121,12 +122,14 @@ struct input_file_prep {
 		//do check to be sure the two files are the same length
 		if(source_len!=target_len) {
 			std::cerr << "ERROR: Input files are not the same length\n";
-			exit (EXIT_FAILURE);
+			return false;
+			//exit (EXIT_FAILURE);
 		}
 
 		if(minibatch_size>source_len) {
 			std::cerr << "ERROR: minibatch size cannot be greater than the file size\n";
-			exit (EXIT_FAILURE);
+			return false;
+			//exit (EXIT_FAILURE);
 		}
 
 
@@ -187,6 +190,7 @@ struct input_file_prep {
 
 		if(data.size()==0) {
 			std::cout << "ERROR: file size is zero, could be wrong input file or all lines are above max sent length\n";
+			return false;
 			exit (EXIT_FAILURE);
 		}
 
@@ -246,7 +250,6 @@ struct input_file_prep {
 		output_model.open(model_output_file_name.c_str());
 		output_model << 0 << " " << hiddenstate_size << " " << target_vocab_size << " " << source_vocab_size << "\n";
 
-
 		std::priority_queue<mapping_pair,std::vector<mapping_pair>, mapping_pair_compare_functor> src_map_heap;
 		std::priority_queue<mapping_pair,std::vector<mapping_pair>, mapping_pair_compare_functor> tgt_map_heap;
 
@@ -266,28 +269,35 @@ struct input_file_prep {
 
 		output_model << "==========================================================\n";
 		src_mapping["<START>"] = 0;
+		src_mapping["<UNK>"] = 1;
 		output_model << 0 << " " << "<START>" << "\n";
-		for(int i=1; i<source_vocab_size-1; i++) {
+		output_model << 1 << " " << "<UNK>" << "\n";
+
+		for(int i=2; i<source_vocab_size; i++) {
 			src_mapping[src_map_heap.top().word] = i;
 			output_model << i << " " << src_map_heap.top().word << "\n";
 			src_map_heap.pop();
 		}
-		src_mapping["<UNK>"] = source_vocab_size-1;
-		output_model << source_vocab_size-1 << " " << "<UNK>" << "\n";
+		// src_mapping["<UNK>"] = source_vocab_size-1;
+		// output_model << source_vocab_size-1 << " " << "<UNK>" << "\n";
 		output_model << "==========================================================\n";
 
 		tgt_mapping["<START>"] = 0;
 		tgt_mapping["<EOF>"] = 1;
+		tgt_mapping["<UNK>"] = 2;
 		output_model << 0 << " " << "<START>" << "\n";
 		output_model << 1 << " " << "<EOF>" << "\n";
-		for(int i=2; i<target_vocab_size-1; i++) {
+		output_model << 2 << " " << "<UNK>" << "\n";
+
+		for(int i=3; i<target_vocab_size; i++) {
 			tgt_mapping[tgt_map_heap.top().word] = i;
 			output_model << i << " " << tgt_map_heap.top().word << "\n";
 			tgt_map_heap.pop();
 		}
-		tgt_mapping["<UNK>"] = target_vocab_size-1;
-		output_model << target_vocab_size-1 << " " << "<UNK>" << "\n";
+		// tgt_mapping["<UNK>"] = target_vocab_size-1;
+		// output_model << target_vocab_size-1 << " " << "<UNK>" << "\n";
 		output_model << "==========================================================\n";
+
 
 		//now integerize
 		for(int i=0; i<data.size(); i++) {
@@ -295,7 +305,7 @@ struct input_file_prep {
 			std::vector<int> tgt_int;
 			for(int j=0; j<data[i].src_sent.size(); j++) {
 				if(src_mapping.count(data[i].src_sent[j])==0) {
-					src_int.push_back(source_vocab_size-1);
+					src_int.push_back(src_mapping["<UNK>"]);
 				}
 				else {
 					src_int.push_back(src_mapping[data[i].src_sent[j]]);
@@ -311,7 +321,7 @@ struct input_file_prep {
 
 			for(int j=0; j<data[i].tgt_sent.size(); j++) {
 				if(tgt_mapping.count(data[i].tgt_sent[j])==0) {
-					tgt_int.push_back(target_vocab_size-1);
+					tgt_int.push_back(tgt_mapping["<UNK>"]);
 				}
 				else {
 					tgt_int.push_back(tgt_mapping[data[i].tgt_sent[j]]);
@@ -415,11 +425,13 @@ struct input_file_prep {
 		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_target_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff (source + target): " << VISUAL_num_tokens_thrown_away <<"\n";
 		std::cout << "-------------------------------------------------------------------------------\n\n";
+	
+		return true;
 	}
 
 
 
-	void prep_files_train_LM(int minibatch_size,int max_sent_cutoff,
+	bool prep_files_train_LM(int minibatch_size,int max_sent_cutoff,
 		std::string target_file_name,
 		std::string output_file_name,int &target_vocab_size,
 		bool shuffle,std::string model_output_file_name,int hiddenstate_size) 
@@ -453,7 +465,8 @@ struct input_file_prep {
 
 		if(minibatch_size>target_len) {
 			std::cerr << "ERROR: minibatch size cannot be greater than the file size\n";
-			exit (EXIT_FAILURE);
+			return false;
+			//exit (EXIT_FAILURE);
 		}
 
 
@@ -502,7 +515,8 @@ struct input_file_prep {
 
 		if(data.size()==0) {
 			std::cout << "ERROR: your dataset if of length zero\n";
-			exit (EXIT_FAILURE);
+			return false;
+			//exit (EXIT_FAILURE);
 		}
 
 		//sort the data based on minibatch
@@ -559,16 +573,21 @@ struct input_file_prep {
 		output_model << "==========================================================\n";
 		tgt_mapping["<START>"] = 0;
 		tgt_mapping["<EOF>"] = 1;
+		tgt_mapping["<UNK>"] = 2;
 		output_model << 0 << " " << "<START>" << "\n";
 		output_model << 1 << " " << "<EOF>" << "\n";
-		for(int i=2; i<target_vocab_size-1; i++) {
+		output_model << 2 << " " << "<UNK>" << "\n";
+
+		for(int i=3; i<target_vocab_size; i++) {
 			tgt_mapping[tgt_map_heap.top().word] = i;
 			output_model << i << " " << tgt_map_heap.top().word << "\n";
+	
 			tgt_map_heap.pop();
 		}
-		tgt_mapping["<UNK>"] = target_vocab_size-1;
-		output_model << target_vocab_size-1 << " " << "<UNK>" << "\n";
+		// tgt_mapping["<UNK>"] = target_vocab_size-1;
+		// output_model << target_vocab_size-1 << " " << "<UNK>" << "\n";
 		output_model << "==========================================================\n";
+
 
 		//now integerize
 		for(int i=0; i<data.size(); i++) {
@@ -576,7 +595,7 @@ struct input_file_prep {
 
 			for(int j=0; j<data[i].tgt_sent.size(); j++) {
 				if(tgt_mapping.count(data[i].tgt_sent[j])==0) {
-					tgt_int.push_back(target_vocab_size-1);
+					tgt_int.push_back(tgt_mapping["<UNK>"]);
 				}
 				else {
 					tgt_int.push_back(tgt_mapping[data[i].tgt_sent[j]]);
@@ -645,6 +664,8 @@ struct input_file_prep {
 		std::cout << "Longest target segment (after removing long sentences for training): " << VISUAL_longest_sent << "\n";
 		std::cout << "Total word tokens thrown out due to sentence cutoff: " << VISUAL_num_tokens_thrown_away <<"\n";
 		std::cout << "-------------------------------------------------------------------------------\n\n";
+		
+		return true;
 	}
 
 
@@ -1330,10 +1351,6 @@ struct input_file_prep {
 		final_output.close();
 		unint.close();
 	}
-
-
-
-
 
 
 };

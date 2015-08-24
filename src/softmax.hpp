@@ -831,7 +831,7 @@ void softmax_layer<dType>::prep_GPU_vocab_indices(int *h_output_vocab_indices_ta
 
 //outputdist is passed in because we only want a minibatch of one
 template<typename dType>
-int softmax_layer<dType>::stoic_generation(dType *h_outputdist,dType *d_outputdist) {
+int softmax_layer<dType>::stoic_generation(dType *h_outputdist,dType *d_outputdist,double temperature) {
 	train_perplexity = false; //just to be sure ...
 	minibatch_size = 1; //for get dist to not override other memory
 	cudaDeviceSynchronize();
@@ -845,6 +845,18 @@ int softmax_layer<dType>::stoic_generation(dType *h_outputdist,dType *d_outputdi
 	//now get a cumulative sum
 	double cumul_sum=0;
 	cudaMemcpy(h_outputdist, d_outputdist, output_vocab_size*sizeof(dType), cudaMemcpyDeviceToHost);
+
+	//temperature schedule
+	double total_sum=0;
+	for(int i=0; i<output_vocab_size; i++) {
+		h_outputdist[i] = std::pow(h_outputdist[i],temperature);
+		total_sum+=h_outputdist[i];
+	}
+
+	for(int i=0; i<output_vocab_size; i++) {
+		h_outputdist[i] = h_outputdist[i]/total_sum;
+	}
+
 	//double total_sum_check=0;
 	// std::cout << "------------------printing out prob for all chars---------------\n";
 	// for(int i=0; i<output_vocab_size; i++) {
@@ -860,8 +872,20 @@ int softmax_layer<dType>::stoic_generation(dType *h_outputdist,dType *d_outputdi
 		}
 	}
 
-
-
 }
+
+template<typename dType>
+void softmax_layer<dType>::dump_probs(std::ofstream &LSTM_dump_stream) {
+	thrust::device_ptr<dType> output_ptr = thrust::device_pointer_cast(d_outputdist);
+	LSTM_dump_stream <<"Output distribution:";
+	for(int i=0; i<output_vocab_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!=output_vocab_size-1) {
+			LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+}
+
 
 

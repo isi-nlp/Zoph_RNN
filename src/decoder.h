@@ -336,7 +336,7 @@ struct decoder {
 		while(!best_hypoth_temp.empty()) {
 
 			if(print_score) {
-				output << "Score: " <<hypotheses[best_hypoth_temp.top().index].score << "\n";
+				output << "-Score: " <<hypotheses[best_hypoth_temp.top().index].score << "\n";
 			}
 			for(int j=0; j<hypotheses[best_hypoth_temp.top().index].hypothesis.size(); j++) {
 				output << hypotheses[best_hypoth_temp.top().index].hypothesis(j) << " ";

@@ -517,6 +517,55 @@ void neuralMT_model<dType>::dump_weights() {
 	//output.flush();
 }
 
+template<typename dType>
+void neuralMT_model<dType>::dump_best_model(std::string best_model_name,std::string const_model) {
+
+	if(boost::filesystem::exists(best_model_name)) {
+		boost::filesystem::remove(best_model_name);
+	}
+
+	std::ifstream const_model_stream;
+	const_model_stream.open(const_model.c_str());
+
+	std::ofstream best_model_stream;
+	best_model_stream.open(best_model_name.c_str());
+
+
+	//now create the new model file
+	std::string str;
+	std::string word;
+	std::getline(const_model_stream, str);
+	best_model_stream << str << "\n";
+	std::getline(const_model_stream, str);
+	best_model_stream << str << "\n";
+	while(std::getline(const_model_stream, str)) {
+		best_model_stream << str << "\n";
+		if(str.size()>3 && str[0]=='=' && str[1]=='=' && str[2]=='=') {
+				break; //done with source mapping
+		}
+	}
+
+	if(!LM) {
+		while(std::getline(const_model_stream, str)) {
+			best_model_stream << str << "\n";
+			if(str.size()>3 && str[0]=='=' && str[1]=='=' && str[2]=='=') {
+					break; //done with source mapping
+			}
+		}
+	}
+
+	if(!LM) {
+		input_layer_source.dump_weights(best_model_stream);
+	}
+	input_layer_target.dump_weights(best_model_stream);
+	
+	softmax.dump_weights(best_model_stream);
+	best_model_stream.flush();
+	best_model_stream.close();
+	const_model_stream.close();
+	
+}
+
 
 //Load in the weights from a file, so the model can be used
 template<typename dType>
@@ -643,32 +692,27 @@ void neuralMT_model<dType>::decoder_forward_prop_source(const Eigen::MatrixBase<
 		input_layer_source.d_init_hidden_vector,input_layer_source.d_init_cell_vector);
 	input_layer_source.nodes[0].forward_prop();
 
+	if(dump_LSTM) {
+		cudaDeviceSynchronize();
+		input_layer_source.nodes[0].dump_LSTM(LSTM_stream_dump,"-----------Source word: " + std::to_string(0) + "-----------\n");
+	}
+
 	for(int i=1; i<source_vocab_indices.cols(); i++) {
 		int step = i; //since minibatch size is 1
 		input_layer_source.nodes[i].update_vectors_forward(input_layer_source.nodes[i-1].h_t,input_layer_source.nodes[i-1].c_t,
 			source_vocab_indices,i,d_input_vocab_indicies_source + step,d_one,
 			input_layer_source.nodes[i-1].d_h_t,input_layer_source.nodes[i-1].d_c_t);
 		input_layer_source.nodes[i].forward_prop();
+
+		if(dump_LSTM) {
+			cudaDeviceSynchronize();
+			input_layer_source.nodes[i].dump_LSTM(LSTM_stream_dump,"-----------Source word: " + std::to_string(i) + "-----------\n");
+		}
 	}
 
 	//std::cout << "SOURCE LENGTH: " << source_vocab_indices.cols() << "\n";
 
 	cudaDeviceSynchronize();
-	// std::cout << "---------------FIRST h_t debug---------------\n";
-	// std::cout << input_layer_source.nodes[0].h_t << "\n\n";
-	// std::cout << "index being used for input: " << source_vocab_indices.col(0) << "\n";
-
-	// std::cout << "---------------SECOND h_t debug---------------\n";
-	// std::cout << input_layer_source.nodes[1].h_t << "\n\n";
-	// std::cout << "index being used for input: " << source_vocab_indices.col(1) << "\n";
-
-	// std::cout << "---------------LAST h_t debug---------------\n";
-	// std::cout << input_layer_source.nodes[source_vocab_indices.cols()-1].h_t << "\n\n";
-	// std::cout << "index being used for input: " << source_vocab_indices.col(source_vocab_indices.cols()-1) << "\n";
-
-	// std::cout << "---------------LAST c_t debug---------------\n";
-	// std::cout << input_layer_source.nodes[source_vocab_indices.cols()-1].c_t << "\n\n";
-	// std::cout << "index being used for input: " << source_vocab_indices.col(source_vocab_indices.cols()-1) << "\n";
 }
 
 
@@ -718,6 +762,12 @@ void neuralMT_model<dType>::decoder_forward_prop_target(struct file_helper_decod
 	//copy the outputdist from the GPU to the output
 	cudaDeviceSynchronize();
 	cudaMemcpy(h_outputdist,softmax.d_outputdist,softmax.output_vocab_size*input_layer_target.minibatch_size*sizeof(dType),cudaMemcpyDeviceToHost); //CHANGED
+
+	if(dump_LSTM) {
+		cudaDeviceSynchronize();
+		input_layer_target.nodes[curr_index].dump_LSTM(LSTM_stream_dump,"-----------Target word: " + std::to_string(curr_index) + "-----------\n");
+		softmax.dump_probs(LSTM_stream_dump);
+	}
 }
 
 
@@ -726,15 +776,23 @@ template<typename dType>
 void neuralMT_model<dType>::beam_decoder(int beam_size,std::string input_file_name,
 	std::string input_weight_file_name,int num_lines_in_file,int source_vocab_size,int target_vocab_size,
 	int longest_sent,int LSTM_size,dType penalty,std::string decoder_output_file,dType min_decoding_ratio,
-	dType max_decoding_ratio,bool scaled,int num_hypotheses,bool print_score) 
+	dType max_decoding_ratio,bool scaled,int num_hypotheses,bool print_score,bool dump_LSTM,std::string LSTM_dump_file) 
 {
+	//file stuff for dumping LSTM info
+	this->dump_LSTM = dump_LSTM;
+	if(dump_LSTM) {
+		LSTM_stream_dump.open(LSTM_dump_file.c_str());
+		beam_size = 1;
+		num_hypotheses = 1;
+	}
+
 
 	//initialize stuff special to decoder
 	input_layer_target.temp_swap_vals.resize(LSTM_size,beam_size); //used for changing hidden and cell state columns
 
-	if(target_vocab_size<=20 || beam_size >= target_vocab_size) {
+	if(target_vocab_size<=144 || beam_size >= target_vocab_size) {
 		std::cout << "Beam size reset to one because of small target vocab: " << beam_size << "\n";
-		beam_size = 1;
+		beam_size = (int)std::sqrt(target_vocab_size);
 	}
 
 	file_helper_decoder fileh(input_file_name,num_lines_in_file,longest_sent);
@@ -770,6 +828,10 @@ void neuralMT_model<dType>::beam_decoder(int beam_size,std::string input_file_na
 		fileh.read_sentence(); //read sentence from file and put it on the GPU
 		//std::cout << "Starting new sentence for decoding\n";
 		std::cout << "Current sentence num: " << i+1 << " (out of) " << num_lines_in_file << "\n";
+
+		if(dump_LSTM) {
+			LSTM_stream_dump << "Current sentence num: " << i+1 << " (out of) " << num_lines_in_file << "\n";
+		}
 		//run forward prop or the source side
 		// std::cout << "----------------minibatch tokens_source-----------------\n";
 		// std::cout << "Current index: " << i << "\n";
@@ -816,7 +878,7 @@ void neuralMT_model<dType>::copy_dist_to_eigen(dType *h_outputdist,const Eigen::
 }
 
 template<typename dType>
-void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_file_name) {
+void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_file_name,double temperature) {
 
 	//load weights
 	//always load for stoic generation
@@ -834,7 +896,7 @@ void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_
 	h_current_index[0] = 0; //this is the start index, always start the generation with this
 	int *d_current_index;
 
-	ofs << h_current_index[0] << " ";
+	//ofs << h_current_index[0] << " ";
 
 	int *h_one = (int *)malloc(1 *sizeof(int));
 	h_one[0] = 1;
@@ -864,13 +926,14 @@ void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_
 	cudaDeviceSynchronize();
 
 	softmax.backprop_prep_GPU(sg_node.d_h_t,NULL,NULL,NULL);
-	h_current_index[0] = softmax.stoic_generation(h_outputdist,d_outputdist);
+	h_current_index[0] = softmax.stoic_generation(h_outputdist,d_outputdist,temperature);
 	ofs << h_current_index[0] << " ";
 	cudaMemcpy(d_current_index, h_current_index, 1*sizeof(int), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_h_t_prev,sg_node.d_h_t,softmax.LSTM_size*1*sizeof(dType),cudaMemcpyDeviceToDevice);
 	cudaMemcpy(d_c_t_prev,sg_node.d_c_t,softmax.LSTM_size*1*sizeof(dType),cudaMemcpyDeviceToDevice);
 
-	for(int i=1; i<length; i++) {
+	int num_sent = 0;
+	while(num_sent<length) {
 
 		//std::cout << "Current char being sent to softmax: " << h_current_index[0] << "\n";
 		sg_node.update_vectors_forward_GPU(d_current_index,d_one,d_h_t_prev,d_c_t_prev);
@@ -878,12 +941,17 @@ void neuralMT_model<dType>::stoicastic_generation(int length,std::string output_
 		cudaDeviceSynchronize();
 
 		softmax.backprop_prep_GPU(sg_node.d_h_t,NULL,NULL,NULL);
-		h_current_index[0] = softmax.stoic_generation(h_outputdist,d_outputdist);
-		ofs << h_current_index[0] << " ";
+		h_current_index[0] = softmax.stoic_generation(h_outputdist,d_outputdist,temperature);
 		if(h_current_index[0]==1) {
 			//clear hidden state because end of file
 			cudaMemset(sg_node.d_h_t,0,softmax.LSTM_size*1*sizeof(dType));
 			cudaMemset(sg_node.d_c_t,0,softmax.LSTM_size*1*sizeof(dType));
+			h_current_index[0] = 0;
+			ofs << "\n";
+			num_sent++;
+		}
+		else {
+			ofs << h_current_index[0] << " ";
 		}
 		cudaMemcpy(d_current_index, h_current_index, 1*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_h_t_prev,sg_node.d_h_t,softmax.LSTM_size*1*sizeof(dType),cudaMemcpyDeviceToDevice);

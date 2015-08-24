@@ -225,6 +225,8 @@ public:
 	void update_vectors_forward_decoder(const Eigen::MatrixBase<Derived> &vocab,int index,
 		int *d_input_vocab_indices,int *d_input_vocab_indices_01);
 
+	void dump_LSTM(std::ofstream &LSTM_dump_stream,std::string intro);
+
 };
 
 #endif

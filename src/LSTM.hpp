@@ -947,6 +947,72 @@ void LSTM_IH_Node<dType>::get_d_ERRt_ht_DMA(dType *d_d_ERRt_ht_softmax) {
 	
 }
 
+template<typename dType>
+void LSTM_IH_Node<dType>::dump_LSTM(std::ofstream &LSTM_dump_stream,std::string intro) {
+	cudaDeviceSynchronize();
+	LSTM_dump_stream << intro;
+	int vocab_index;
+	cudaMemcpy(&vocab_index,d_input_vocab_indices,1*sizeof(int),cudaMemcpyDeviceToHost);
+	LSTM_dump_stream << "Vocab index:"<<vocab_index << "\n";
+
+	//forget gate
+	thrust::device_ptr<dType> output_ptr = thrust::device_pointer_cast(d_f_t);
+	LSTM_dump_stream << "Forget gate:";
+	for(int i=0; i<LSTM_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!= LSTM_size-1) {
+		 	LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+
+	//input gate
+	LSTM_dump_stream << "Input gate:";
+	output_ptr = thrust::device_pointer_cast(d_i_t);
+	for(int i=0; i<LSTM_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!= LSTM_size-1) {
+		 	LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+
+	//c_t
+	LSTM_dump_stream << "c_t:";
+	output_ptr = thrust::device_pointer_cast(d_c_t);
+	for(int i=0; i<LSTM_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!= LSTM_size-1) {
+		 	LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+
+
+	//output gate
+	LSTM_dump_stream << "Output gate:";
+	output_ptr = thrust::device_pointer_cast(d_o_t);
+	for(int i=0; i<LSTM_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!= LSTM_size-1) {
+		 	LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+
+
+	//h_t
+	LSTM_dump_stream << "h_t:";
+	output_ptr = thrust::device_pointer_cast(d_h_t);
+	for(int i=0; i<LSTM_size; i++) {
+		LSTM_dump_stream << output_ptr[i];
+		if(i!= LSTM_size-1) {
+		 	LSTM_dump_stream << " ";
+		}
+	}
+	LSTM_dump_stream << "\n";
+}
+
 
 
 

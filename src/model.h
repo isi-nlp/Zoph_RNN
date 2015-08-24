@@ -62,6 +62,10 @@ public:
 
 	bool LM;// true if language model only, aka no source side
 
+	//for visualizing the RNN
+	bool dump_LSTM;
+	std::ofstream LSTM_stream_dump;
+
 	///////////////////////////////////Methods for the class//////////////////////////////////////////////
 
 	//Called at beginning of program once to initialize the weights
@@ -114,6 +118,8 @@ public:
 	//Output the weights to a file
 	void dump_weights();
 
+	void dump_best_model(std::string best_model_name,std::string const_model);
+
 	//Read in Weights from file
 	void load_weights();
 
@@ -131,7 +137,7 @@ public:
 	void beam_decoder(int beam_size,std::string input_file_name,
 		std::string input_weight_file_name,int num_lines_in_file,int source_vocab_size,int target_vocab_size,
 		int longest_sent,int LSTM_size,dType penalty,std::string decoder_output_file,dType min_decoding_ratio,
-		dType max_decoding_ratio,bool scaled,int num_hypotheses,bool print_score);
+		dType max_decoding_ratio,bool scaled,int num_hypotheses,bool print_score,bool dump_LSTM,std::string LSTM_dump_file);
 
 	template<typename Derived>
 	void decoder_forward_prop_source(const Eigen::MatrixBase<Derived> &source_vocab_indices,int *d_input_vocab_indicies_source,int *d_ones);
@@ -143,7 +149,7 @@ public:
 	void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
 
 
-	void stoicastic_generation(int length,std::string output_file_name);
+	void stoicastic_generation(int length,std::string output_file_name,double temperature);
 
 };
 
