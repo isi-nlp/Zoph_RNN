@@ -391,10 +391,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 						exit (EXIT_FAILURE);
 					}
 					params.dev_target_file_name = adaptive_learning_rate[0];
+					params.test_file_name = params.unique_dir + "/validation.txt";
 
 					input_file_prep input_helper;
 
-					input_helper.integerize_file_LM(params.output_weight_file,params.dev_target_file_name,"tmp/validation.txt",
+					input_helper.integerize_file_LM(params.output_weight_file,params.dev_target_file_name,params.test_file_name,
 						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size); 
 
 				}
@@ -407,6 +408,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					}
 					params.dev_source_file_name = adaptive_learning_rate[0];
 					params.dev_target_file_name = adaptive_learning_rate[1];
+					params.test_file_name = params.unique_dir + "/validation.txt";
 
 					if(params.dev_source_file_name == params.dev_target_file_name) {
 						std::cout << "ERROR: do not use the same file for source and target data\n";
@@ -418,7 +420,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					input_file_prep input_helper;
 
 					input_helper.integerize_file_nonLM(params.output_weight_file,params.dev_source_file_name,
-						params.dev_target_file_name,"tmp/validation.txt",
+						params.dev_target_file_name,params.test_file_name,
 						params.longest_sent,params.minibatch_size,params.LSTM_size,params.source_vocab_size,params.target_vocab_size);
 				}
 
