@@ -21,6 +21,9 @@
 template<typename dType>
 class Input_To_Hidden_Layer;
 
+template<typename dType>
+class Hidden_To_Hidden_Layer;
+
 struct file_helper;
 
 template<typename dType>
@@ -28,22 +31,23 @@ class neuralMT_model {
 public:
 	/////////////////////////////////Current minibatch info for the model///////////////////////////////////
 
-	//Softmax layer for the model
-	softmax_layer<dType> softmax;
+	//loss layer for the model
+	//softmax_layer<dType> *softmax;
+	base_loss_layer<dType> *softmax;
 
 	//First layer of model, the input to hidden layer
 	Input_To_Hidden_Layer<dType> input_layer_source;
 	Input_To_Hidden_Layer<dType> input_layer_target;
 
-	input_layer_gpu_info ih_layer_info;
-	softmax_layer_gpu_info s_layer_info;
-
-	//Hidden layer of model
-	//Hidden_To_Hidden_Layer hidden_layer;
+	//Hidden layers of model
+	std::vector<Hidden_To_Hidden_Layer<dType>> source_hidden_layers;
+	std::vector<Hidden_To_Hidden_Layer<dType>> target_hidden_layers;
 
 	/////////////////////////////////Other random stuff//////////////////////////////////////////////////
 
 	file_helper *file_info;
+
+	softmax_layer_gpu_info s_layer_info;
 
 	std::ifstream input;
 	std::ofstream output;
@@ -62,9 +66,23 @@ public:
 
 	bool LM;// true if language model only, aka no source side
 
+	bool train = false; //this is for makign sure dropout is not used at test time
+	bool grad_check_flag = false;
+	//for the attention model
+	int source_length = -1;
+
+	//attention model
+	attention_params attent_params;
+	std::ofstream output_alignments;
+
 	//for visualizing the RNN
 	bool dump_LSTM;
 	std::ofstream LSTM_stream_dump;
+
+	//for decoding multilayer models, on index for each layer
+	std::vector<prev_source_state<dType>> previous_source_states;
+	std::vector<prev_target_state<dType>> previous_target_states;
+
 
 	///////////////////////////////////Methods for the class//////////////////////////////////////////////
 
@@ -72,18 +90,21 @@ public:
 	void initModel(int LSTM_size,int minibatch_size,int source_vocab_size,int target_vocab_size,
 		int longest_sent,bool debug,dType learning_rate,bool clip_gradients,dType norm_clip,
 		std::string input_weight_file,std::string output_weight_file,bool scaled,bool train_perplexity,
-		bool truncated_softmax,int shortlist_size,int sampled_size,bool LM);
+		bool truncated_softmax,int shortlist_size,int sampled_size,bool LM,int num_layers,std::vector<int> gpu_indicies,
+		bool dropout,dType dropout_rate,struct attention_params attent_params,global_params &params);
 
 	//For the decoder
-	void initModel_decoding(int LSTM_size,int minibatch_size,int source_vocab_size,int target_vocab_size,
- 		int longest_sent,bool debug,dType learning_rate,bool clip_gradients,dType norm_clip,
- 		std::string input_weight_file,std::string output_weight_file,bool scaled);
+	void initModel_decoding(int LSTM_size,int beam_size,int source_vocab_size,int target_vocab_size,
+		int num_layers,std::string input_weight_file,int gpu_num,bool dump_LSTM,std::string LSTM_stream_dump,global_params &params);
 
 	//This initializes the streams,event and cuBLAS handlers, along with setting the GPU's for the layers
 	void init_GPUs();
 
 	//Dumps all the GPU info
 	void print_GPU_Info();
+
+	//initialize prev states for decoding
+	void init_prev_states(int num_layers, int LSTM_size,int minibatch_size, int device_number);
 
 	//Gets called one minibatch is formulated into a matrix
 	//This matrix is then passed in and forward/back prop is done, then gradients are updated
@@ -94,7 +115,7 @@ public:
 		int *h_output_vocab_indicies_source,int *h_input_vocab_indicies_target,int *h_output_vocab_indicies_target,
 		int current_source_length,int current_target_length,int *h_output_vocab_indicies_source_Wgrad,
 		int *h_input_vocab_indicies_target_Wgrad,int len_source_Wgrad,int len_target_Wgrad,int *h_sampled_indices,
-		int len_unique_words_trunc_softmax);
+		int len_unique_words_trunc_softmax,int *h_batch_info);
 
 	//Sets all gradient matrices to zero, called after a minibatch updates the gradients
 	void clear_gradients();
@@ -115,6 +136,8 @@ public:
 	//Called after each minibatch, once the gradients are calculated
 	void update_weights();
 
+	void update_weights_OLD(); //per matrix clipping
+
 	//Output the weights to a file
 	void dump_weights();
 
@@ -133,24 +156,17 @@ public:
 	//Maps the file info pointer to the model
 	void initFileInfo(struct file_helper *file_info);
 
-	//This is the beam decoder
-	void beam_decoder(int beam_size,std::string input_file_name,
-		std::string input_weight_file_name,int num_lines_in_file,int source_vocab_size,int target_vocab_size,
-		int longest_sent,int LSTM_size,dType penalty,std::string decoder_output_file,dType min_decoding_ratio,
-		dType max_decoding_ratio,bool scaled,int num_hypotheses,bool print_score,bool dump_LSTM,std::string LSTM_dump_file);
-
-	template<typename Derived>
-	void decoder_forward_prop_source(const Eigen::MatrixBase<Derived> &source_vocab_indices,int *d_input_vocab_indicies_source,int *d_ones);
-
-	void decoder_forward_prop_target(struct file_helper_decoder *fh,struct decoder<dType> *d,int *d_ones,
-		int curr_index,dType *h_outputdist);
-
-	template<typename Derived>
-	void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
-
-
 	void stoicastic_generation(int length,std::string output_file_name,double temperature);
 
+	void forward_prop_source(int *d_input_vocab_indicies_source,int *d_ones,int source_length,int LSTM_size);
+	void forward_prop_target(int curr_index,int *d_current_indicies,int *d_ones,int LSTM_size, int beam_size);
+
+	template<typename Derived>
+	void swap_decoding_states(const Eigen::MatrixBase<Derived> &indicies,int index,dType *d_temp_swap_vals);
+
+	void target_copy_prev_states(int LSTM_size, int beam_size);
+
+	void dump_alignments(int target_length,int minibatch_size,int *h_input_vocab_indicies_source,int *h_input_vocab_indicies_target);
 };
 
 #endif

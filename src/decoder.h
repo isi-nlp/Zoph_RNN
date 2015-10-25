@@ -132,6 +132,7 @@ struct decoder {
 		this->output_file_name = output_file_name;
 		this->num_hypotheses = num_hypotheses;
 		this->print_score = print_score;
+		std::cout << "OUTPUT FILE NAME FOR DECODER: " << output_file_name << "\n";
 		output.open(output_file_name.c_str());
 
 		current_indices.resize(beam_size);
@@ -143,7 +144,7 @@ struct decoder {
 		new_indicies_changes.resize(beam_size);
 
 		h_current_indices = (int *)malloc(beam_size*1*sizeof(int));
-		cudaMalloc((void**)&d_current_indices,beam_size*1*sizeof(int));//put void**
+		//cudaMalloc((void**)&d_current_indices,beam_size*1*sizeof(int));//put void**
 	}
 
 	~decoder() {
@@ -248,7 +249,7 @@ struct decoder {
 		for(int i=0; i<beam_size; i++) {
 			h_current_indices[i] = current_indices(i);
 		}
-		cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice);
+		//cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice);
 	}
 	
 	void init_decoder() {
@@ -264,11 +265,11 @@ struct decoder {
 
 		for(int i=0; i<beam_size; i++) {
 			for(int j=0; j<max_decoding_length; j++) {
-				top_sentences(i,j)=start_symbol;
+				top_sentences(i,j) = start_symbol;
 			}
 		}
 
-		cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice);
+		//cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice);
 	}
 
 	void print_current_hypotheses() {
@@ -308,7 +309,6 @@ struct decoder {
 		dType max_val = -FLT_MAX;
 		int max_index = -1;
 		dType len_ratio;
-
 		for(int i=0; i<hypotheses.size(); i++) {
 			len_ratio = ((dType)hypotheses[i].hypothesis.size())/source_length;
 			if(len_ratio > min_decoding_ratio) {
@@ -323,7 +323,6 @@ struct decoder {
 				}
 			}
 		}
-
 		//for making k-best list descending 
 		std::priority_queue<k_best<dType>,std::vector<k_best<dType>>, k_best_compare_functor> best_hypoth_temp;
 		while(!best_hypoth.empty()) {
@@ -331,7 +330,6 @@ struct decoder {
 			best_hypoth.pop();
 		}
 		
-
 		output << "------------------------------------------------\n";
 		while(!best_hypoth_temp.empty()) {
 
@@ -345,6 +343,8 @@ struct decoder {
 			best_hypoth_temp.pop();
 		}
 		output << "\n";
+
+		output.flush();
 
 
 

@@ -2,8 +2,20 @@
 
 typedef float precision;
 //#define CPU_DEBUG //This is if you want to have the eigen code running
-//#define CPU_MODE
 #define GPU_MODE
+#define NDEBUG
+//#define REMOVE_STREAMS //this gets rid of all stream parallelism
+//#define NAN_DEBUG
+//#define REMOVE_STREAMS_FEED_INPUT
+
+struct attention_params {
+	bool attention_model = false;
+	int D = 1;
+	bool feed_input = false;
+	bool dump_alignments = false;
+	std::string tmp_alignment_file = "NULL";
+	std::string alignment_file = "alignments.txt";
+};
 
 struct global_params {	
 
@@ -15,6 +27,55 @@ struct global_params {
 	//for restarting model training
 	std::string load_model_name = "NULL";
 	bool load_model_train=false;
+
+
+	//for training a model with the same indicies as another models for ensembles
+	std::string ensemble_train_file_name = "NULL";
+	bool ensemble_train = false;
+
+
+	//for dropout
+	bool dropout = false;
+	precision dropout_rate = 0.5; //probability of a node being kept
+
+
+	//for random seed
+	bool random_seed = false;
+
+
+	//for the attention model
+	attention_params attent_params;
+	// bool clip_cell = false;
+	// precision cell_clip_threshold = 50;
+
+	//for individual gradient clipping
+	bool individual_grad_clip = false;
+	precision ind_norm_clip_thres = 0.1;
+
+	//for gradient clipping whole matrices
+	bool clip_gradient = true;
+	precision norm_clip = 5.0; //Renormalize the gradients so they fit in normball this size, this is also used for total threshold
+
+
+	//for loss functions
+	bool softmax = true;
+
+
+	//nce
+	bool NCE = false;
+	int num_negative_samples = 500;
+
+
+
+	//UNK replace
+	bool unk_replace = false;
+	int unk_aligned_width = 7;
+
+
+	//options for treating input as one long sentence
+	bool carve_data = false;
+	int backprop_len = 20;
+
 
 
 	//General settings
@@ -33,8 +94,8 @@ struct global_params {
 	double temperature=1;
 
 
-	bool HPC_output = false; //flushes the output to a file, so it can be read as the program executes
-	std::string HPC_output_file_name = "HPC_OUTPUT.txt";
+	bool HPC_output = true; //flushes the output to a file, so it can be read as the program executes
+	std::string HPC_output_file_name = "LOG_OUTPUT.txt";
 
 	//Model training info
 	int minibatch_size = 128; //Size of the minibatch
@@ -47,6 +108,11 @@ struct global_params {
 	int epoch_to_start_halving = 6; //After what epoch do you halve the learnign rate
 	int half_way_count = -1; //What is the total number of words that mark half an epoch
 
+	bool stanford_learning_rate = false;
+	precision stanford_decrease_factor = 0.5;
+	int epoch_to_start_halving_full = 6;
+
+
 	//stuff for normal halving of the learning rate where every half epoch the validation set is looked at 
 	//and if it didn't improve, or did worse, the learning rate is halved.
 	//NOTE do not have on google learning rate and the normal learning rate schedule
@@ -56,11 +122,6 @@ struct global_params {
 	std::string dev_source_file_name;
 	std::string dev_target_file_name;
 
-
-	//parameter initialization
-	//Currently uniform initialization
-	precision lower_range = -0.08;
-	precision upper_range = 0.08;
 
 	//note this is only for GPU, not for CPU testing
 	//always use this as thrust cannot use streams until I download new version, fix this for performance when using
@@ -73,17 +134,14 @@ struct global_params {
 	int shortlist_size = 10000;
 	int sampled_size = 5000;
 
-	//gradient update parameters
-	bool clip_gradient = true;
-	precision norm_clip = 5.0; //Renormalize the gradients so they fit in normball this size
-
 
 	//Model size info
 	//vocab size of -1 defaults to the size of the train file specified
 	int source_vocab_size = -1;
 	int target_vocab_size = -1; //Size in input vocabulary, ranging from 0-input_vocab_size, where 0 is start symbol
 	int LSTM_size = 1000; //LSTM cell size, by definition it is the same as the word embedding layer
-	const int num_hidden_layers = 1; //This is the number of stacked LSTM's in the model
+	int num_layers = 1; //This is the number of stacked LSTM's in the model
+	std::vector<int> gpu_indicies;//for training with multiple gpu's
 
 
 	////////////////////Decoder settings//////////////////
@@ -96,6 +154,7 @@ struct global_params {
 	std::string decode_tmp_file; //used for tmp stuff
 	std::string decode_file_name = "NULL";
 	std::string decoder_output_file = "NULL";
+	std::vector<std::string> model_names; //for kbest ensembles
 	std::string decoder_final_file;
 	int decode_num_lines_in_file = -1;//This is learned
 
@@ -148,10 +207,11 @@ struct global_params {
 			std::cout << "Number of Epochs: " << num_epochs << std::endl;
 			std::cout << "Learning Rate: " << learning_rate << std::endl;
 			if(clip_gradient) {
-				std::cout << "Gradient Clipping Threshold (Norm Ball): " << norm_clip << std::endl;
+				std::cout << "Gradient Clipping Threshold per matrix (Norm Ball): " << norm_clip << std::endl;
 			}
-			std::cout << "Parameter initialization range (uniform): " << lower_range << " " << upper_range << "\n";
-			std::cout << "----------------------------------------------------------\n\n";
+			if(individual_grad_clip) {
+				std::cout << "Gradient Clipping Threshold per element: " << ind_norm_clip_thres << std::endl;
+			}
 			if(truncated_softmax) {
 				std::cout << "-------------------Truncated softmax info----------------------\n";
 				std::cout << "Shortlist Size: " << shortlist_size << std::endl;
@@ -169,7 +229,19 @@ struct global_params {
 		std::cout << "Source Vocab Size: " << source_vocab_size << std::endl;
 		std::cout << "Target Vocab Size: " << target_vocab_size << std::endl;
 		std::cout << "Number of Hidden Units: " << LSTM_size << std::endl;
-		std::cout << "Number of Hidden Layers: " << num_hidden_layers << std::endl;
+		std::cout << "Number of Layers: " << num_layers << std::endl;
+		if(attent_params.attention_model) {
+			std::cout << "Attention model set as true\n";
+			std::cout << "D = " << attent_params.D << "\n";
+			if(attent_params.feed_input) {
+				std::cout << "Feed Input set as true\n";
+			}
+		}
+
+		if(unk_replace) {
+			std::cout << "UNK replace is set to true\n";
+		}
+
 		std::cout << "---------------------------------------------------------------\n\n";
 		if(decode) {
 			std::cout << "------------------------Decode Info------------------------\n";

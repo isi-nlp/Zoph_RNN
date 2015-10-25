@@ -2,6 +2,7 @@
 #ifndef CUSTOM_KERNELS_H
 #define CUSTOM_KERNELS_H
 #include <thrust/transform_reduce.h>
+#include <assert.h>
 //------------------------------------Input data formatting kernels-----------------------------------------------
 
 //transform vocab indices with -1's and numbers to all 0's and 1's
@@ -73,6 +74,18 @@ void forward_sigmoid_kernel(double *d_final,double *temp1,double *temp2,double *
 	}
 }
 
+
+template<typename dType>
+__global__
+void forward_sigmoid_kernel_feed(dType *d_final,dType *temp1,dType *temp2,dType *temp3,dType *d_bias,int hiddenstate_size) {
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		dType temp_val = temp1[index] + temp2[index] + temp3[index] +d_bias[idx];
+		d_final[index] = 1.0/(1.0 + exp(-1.0*temp_val));
+	}
+}
+
 ///////////////////////////////////////////DOUBLE DECLARATION END/////////////////////////////////////////////
 
 
@@ -94,6 +107,18 @@ void forward_tanh_kernel(double *d_final,double *temp1,double *temp2,double *d_b
 		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
 		double temp_val = temp1[index] + temp2[index] + d_bias[idx];
 		d_final[index] = tanh(temp_val);
+	}
+}
+
+
+template<typename dType>
+__global__
+void forward_tanh_kernel_feed(dType *d_final,dType *temp1,dType *temp2,dType *temp3,dType *d_bias,int hiddenstate_size) {
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		dType temp_val = temp1[index] + temp2[index] + temp3[index] + d_bias[idx];
+		d_final[index] = tanh_wrapper(temp_val);
 	}
 }
 ///////////////////////////////////////////DOUBLE DECLARATION END/////////////////////////////////////////////
@@ -321,6 +346,30 @@ void W_gradient_kernel(double *d_W_grad,int *d_vocab_indices,double *temp1,doubl
 
 
 
+__global__
+void W_gradient_kernel_dropout(float *d_W_grad,int *d_vocab_indices,float *temp1,float *temp2,float *temp3,
+	float *temp4,int hiddenstate_size,float *d_dropout_mask,float rate) 
+{
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index_cols = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		float sum = (temp1[index_cols] + temp2[index_cols] + temp3[index_cols] + temp4[index_cols])*(rate > d_dropout_mask[index_cols]) * (1/rate);
+		atomicAdd(&(d_W_grad[IDX2C(idx,d_vocab_indices[blockIdx.x],hiddenstate_size)]),sum);
+	}
+}
+
+
+__global__
+void W_gradient_kernel_dropout(double *d_W_grad,int *d_vocab_indices,double *temp1,double *temp2,double *temp3,
+	double *temp4,int hiddenstate_size,double *d_dropout_mask,double rate) 
+{
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index_cols = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		double sum = (temp1[index_cols] + temp2[index_cols] + temp3[index_cols] + temp4[index_cols])*(rate > d_dropout_mask[index_cols]) * (1/rate);
+		atomicAddDouble(&(d_W_grad[IDX2C(idx,d_vocab_indices[blockIdx.x],hiddenstate_size)]),sum);
+	}
+}
 
 
 
@@ -462,13 +511,13 @@ void outputdist_overflow_prevention_kernel(dType *output, dType *input, int dim)
 
 
 
-template<typename dType>
+template<typename dType,typename dType2>
 __global__
-void outputdist_perplexity_kernel(double *output, dType *input, int dim) {
+void outputdist_perplexity_kernel(dType2 *output, dType *input, int dim,bool print_partition_function,double *d_partition_vals) {
 	__shared__ double buffer[SOFTMAX_THREADS]; //shared memory for the block, this must be the number of threads per block in size
 	int k = blockIdx.x; //get the block index
 	dType *input_k = input + k*dim; //all threads in block start from same index
-	double *output_k = output + k*dim; //again all threads in block start from same index
+	dType2 *output_k = output + k*dim; //again all threads in block start from same index
 
 	int i_start = threadIdx.x; //start at the thread index
 	int i_end = dim; //end at dim
@@ -536,6 +585,10 @@ void outputdist_perplexity_kernel(double *output, dType *input, int dim) {
 	double sum_k = buffer[0];
 	for (int i=i_start; i<i_end; i+=i_step) {
 		output_k[i] = cuda_log_wrapper(output_k[i]) - cuda_log_wrapper(sum_k);
+	}
+
+	if(print_partition_function && threadIdx.x == 0) {
+		d_partition_vals[blockIdx.x] = sum_k;
 	}
 }
 
@@ -790,6 +843,7 @@ void norm_clip_GPU(thrust::device_ptr<dType> &thrust_d_gradient,dType norm_thres
 //clip the norm if it is greater than the threshold
 template<typename dType>
 void norm_clip_GPU_v2(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_gradient,dType norm_threshold,int size,dType *d_temp_result,dType *d_result) {
+
 	dType norm;
 	basic_compute_norm_p1<<<NORM_THREADS,NORM_THREADS>>>(d_gradient,size,d_temp_result);
 	basic_compute_norm_p2<<<1,NORM_THREADS>>>(d_temp_result,d_result);
@@ -801,6 +855,53 @@ void norm_clip_GPU_v2(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_grad
 		thrust::for_each(thrust_d_gradient,thrust_d_gradient+size,unary_op);
 	}
 }
+
+//for global clipping
+template<typename dType>
+void norm_clip_GPU_v2_p1(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_gradient,dType norm_threshold,int size,dType *d_temp_result,dType *d_result) {
+	dType norm;
+	basic_compute_norm_p1<<<NORM_THREADS,NORM_THREADS>>>(d_gradient,size,d_temp_result);
+	basic_compute_norm_p2<<<1,NORM_THREADS>>>(d_temp_result,d_result);
+	devSynchAll();
+	cudaMemcpy(&norm,d_result,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	//norm = std::sqrt(norm);
+	BZ_CUDA::global_norm += norm;
+	// if(norm > norm_threshold) {
+	// 	//std::cout << "ACTUALLY NORM CLIPPING REGULAR PARAM\n";
+	// 	re_scale_norm_functor<dType> unary_op(norm_threshold,norm);
+	// 	thrust::for_each(thrust_d_gradient,thrust_d_gradient+size,unary_op);
+	// }
+}
+
+
+
+template<typename dType>
+void norm_clip_GPU_v2_p2(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_gradient,dType norm_threshold,int size,dType *d_temp_result,dType *d_result) {
+	// dType norm;
+	// basic_compute_norm_p1<<<NORM_THREADS,NORM_THREADS>>>(d_gradient,size,d_temp_result);
+	// basic_compute_norm_p2<<<1,NORM_THREADS>>>(d_temp_result,d_result);
+	// devSyncAll();
+	// cudaMemcpy(&norm,d_result,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	// norm = std::sqrt(norm);
+	//BZ_CUDA::global_norm += norm;
+	if(BZ_CUDA::global_norm > norm_threshold) {
+		//std::cout << "ACTUALLY NORM CLIPPING REGULAR PARAM\n";
+		re_scale_norm_functor<dType> unary_op(norm_threshold,BZ_CUDA::global_norm);
+		thrust::for_each(thrust_d_gradient,thrust_d_gradient+size,unary_op);
+	}
+}
+
+
+//additional gradient clipping stuff
+template<typename dType>
+__global__
+void clip_individual(dType *d_mat, int size,dType threshold) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_mat[i] = d_mat[i] > threshold ? threshold : d_mat[i];
+	}
+}
+
+
 
 //Kernel for getting scaling the gradient of W by 1/(minibatch size)
 template<typename dType>
@@ -814,6 +915,26 @@ void scale_W_gradient(dType *d_W_gradient,int *d_vocab_indicies_m1,int hiddensta
 		}
 	}
 }
+
+
+
+template<typename dType>
+__global__
+void indv_clip_W_gradient(dType *d_W_gradient,int *d_vocab_indicies_m1,int hiddenstate_size,dType threshold,int total_length) {
+	for(int j=blockIdx.y; j<total_length; j+=gridDim.y) {
+		const int idx = threadIdx.x + blockIdx.x*blockDim.x;
+		if(idx < hiddenstate_size) {
+			const int index = IDX2C(idx,d_vocab_indicies_m1[j],hiddenstate_size);
+			if(d_W_gradient[index] > 0) {
+				d_W_gradient[index] = (d_W_gradient[index] > threshold) ? threshold : d_W_gradient[index];
+			}
+			else {
+				d_W_gradient[index] = (d_W_gradient[index] < -threshold) ? -threshold : d_W_gradient[index];
+			}
+		}
+	}
+}
+
 
 
 //compute l2 norm of W
@@ -927,6 +1048,52 @@ void norm_clip_W_GPU_v2(dType *d_global_W_sum,dType * d_grad,
 		int num_block = (hiddenstate_size + threads_per_block-1)/threads_per_block;
 		dim3 kernel(num_block,256,1);
 		dType scalar = (norm_threshold/norm);
+		scale_W_gradient<<<kernel,threads_per_block>>>(d_grad,d_vocab_indicies_m1,hiddenstate_size,scalar,total_length);
+	}
+}
+
+//v2 with custom W gradient clipping
+template<typename dType>
+void norm_clip_W_GPU_v2_p1(dType *d_global_W_sum,dType * d_grad,
+	int *d_vocab_indicies_m1 ,dType norm_threshold,int total_length,int hiddenstate_size) 
+{
+	devSynchAll();
+	dType norm;
+	norm_W_compute_p1<<<NORM_THREADS,NORM_THREADS>>>(d_grad,d_global_W_sum,d_vocab_indicies_m1,hiddenstate_size,total_length);
+	norm_W_compute_p2<<<1,NORM_THREADS>>>(d_global_W_sum);
+	devSynchAll();
+	cudaMemcpy(&norm,d_global_W_sum,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	norm = std::sqrt(norm);
+	//std::cout << "NORM OF W: " << norm << "\n";
+	BZ_CUDA::global_norm += norm;
+	// if(norm > norm_threshold) {
+	// 	//std::cout << "----ACTUALLY CLIPPING W NORM----\n";
+	// 	int threads_per_block = 256;
+	// 	int num_block = (hiddenstate_size + threads_per_block-1)/threads_per_block;
+	// 	dim3 kernel(num_block,256,1);
+	// 	dType scalar = (norm_threshold/norm);
+	// 	scale_W_gradient<<<kernel,threads_per_block>>>(d_grad,d_vocab_indicies_m1,hiddenstate_size,scalar,total_length);
+	// }
+}
+
+//v2 with custom W gradient clipping
+template<typename dType>
+void norm_clip_W_GPU_v2_p2(dType *d_global_W_sum,dType * d_grad,
+	int *d_vocab_indicies_m1 ,dType norm_threshold,int total_length,int hiddenstate_size) 
+{
+	// dType norm;
+	// norm_W_compute_p1<<<NORM_THREADS,NORM_THREADS>>>(d_grad,d_global_W_sum,d_vocab_indicies_m1,hiddenstate_size,total_length);
+	// norm_W_compute_p2<<<1,NORM_THREADS>>>(d_global_W_sum);
+	// cudaMemcpy(&norm,d_global_W_sum,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	// norm = std::sqrt(norm);
+	//std::cout << "NORM OF W: " << norm << "\n";
+	devSynchAll();
+	if(BZ_CUDA::global_norm > norm_threshold) {
+		//std::cout << "----ACTUALLY CLIPPING W NORM----\n";
+		int threads_per_block = 256;
+		int num_block = (hiddenstate_size + threads_per_block-1)/threads_per_block;
+		dim3 kernel(num_block,256,1);
+		dType scalar = (norm_threshold/BZ_CUDA::global_norm);
 		scale_W_gradient<<<kernel,threads_per_block>>>(d_grad,d_vocab_indicies_m1,hiddenstate_size,scalar,total_length);
 	}
 }
@@ -1131,5 +1298,889 @@ void outputdist_truncated_kernel(dType *output, dType *input, int dim,dType samp
 	}
 }
 
+
+
+
+
+
+
+
+
+//-------------------------------------------------Dropout Stuff----------------------------------------
+
+//for forward and backward pass for error and h_t in LSTM
+
+template<typename dType>
+__global__
+void dropout_kernel(dType *d_dropout_mask,dType rate,dType *d_final, int total_length) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
+		d_final[i] = (d_dropout_mask[i] < rate) * (1/rate) * d_final[i];
+	}
+}
+
+
+//-------------------------------------------------Attention model----------------------------------------
+
+
+__global__
+void tanh_kernel(float *d_in,float *d_out,int total_length) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
+		d_out[i] = tanhf(d_in[i]);
+	}
+}
+
+__global__
+void tanh_kernel(double *d_in,double *d_out,int total_length) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
+		d_out[i] = tanh(d_in[i]);
+	}
+}
+
+
+template<typename dType>
+__global__
+void sigmoid_kernel(dType *d_in,dType *d_out,int total_length) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
+		d_out[i] = 1.0/(1.0 + cuda_exp_wrapper(-1.0*d_in[i]));
+	}
+}
+
+
+/*
+	Batch info is in the form
+
+	[sent lens][offsets]
+
+*/
+template<typename dType>
+__global__
+void alignment_pos_kernel(dType *d_in,dType *d_out,int total_length,int *d_batch_info) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
+		d_out[i] =  d_batch_info[i]*d_in[i];
+	}
+}
+
+
+template<typename dType>
+__global__
+void lower_upper_kernel(dType *d_p_t,int *d_lower_upper,int D,int *d_batch_info,int minibatch_size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_lower_upper[IDX2C(0,i,2)] = ( 0 > (int)(d_p_t[i])-D ) ? 0 : ((int)(d_p_t[i])-D);
+		d_lower_upper[IDX2C(1,i,2)] = ( (d_batch_info[i]-1) < (int)(d_p_t[i])+D ) ? (d_batch_info[i]-1) : ((int)(d_p_t[i])+D);
+	}
+}
+
+
+
+
+/*
+	each thread will initialize 2*D + 1 indicies
+	pads from the back
+
+	layout is as follows:
+	
+	[minibatch] [minibatch] [...]
+	There are 2*D + 1 of these minibatch chunks. This how h_s is loaded in so the format is useful
+
+*/
+
+__global__
+void create_indicies_kernel(int *d_indicies,int D,int minibatch_size,int *d_lower_upper,int *d_01_mask) {
+
+	for(int i=threadIdx.x; i < minibatch_size; i += blockDim.x) {
+		int curr_index = d_lower_upper[IDX2C(0,i,2)];
+		int max_index = d_lower_upper[IDX2C(1,i,2)];
+		if(d_01_mask[i]==1) {
+			for(int j = 0; j < 2*D+1; j++) {
+
+				if(curr_index > max_index) {
+					d_indicies[IDX2C(i,j,minibatch_size)] = -1;
+				}
+				else {
+					d_indicies[IDX2C(i,j,minibatch_size)] = curr_index;
+				}
+				curr_index++;
+			}
+		}
+		else {
+			for(int j = 0; j < 2*D+1; j++) {
+				d_indicies[IDX2C(i,j,minibatch_size)] = -1;
+			}
+		}
+	}
+}
+
+
+
+
+/*
+	d_total_hs_mat is the length of the sourth length, where each pointer points
+		to h_s minibatch at that source index
+
+	parallelism works as follows:
+	each block copies one h_s vector for each minibatch
+
+	d_indices is the size of (2*D + 1) * minibatch of ints
+	-1 index means that the alignment is not pointing to a valid source index, will need to zero this out in the exped scores
+	
+	change the parallelism to make each block do 2*D + 1 operations??? Benchmark this
+
+*/
+
+template<typename dType>
+__global__
+void load_in_hs_kernel(dType **d_total_hs_mat, int D,dType *d_hs_mat,int *d_indices,int minibatch_size,int LSTM_size,int *d_batch_info) {
+
+	//each block is responsible for copying one h_s vector into the current h_s
+	for(int i=blockIdx.x; i < (2*D+1)*minibatch_size; i+=gridDim.x) {
+		int minibatch_index = i % minibatch_size;
+		int source_index = d_indices[i];
+		if(source_index!=-1) {
+			for(int j=threadIdx.x; j < LSTM_size ;j+=blockDim.x) {
+				d_hs_mat[IDX2C(j,i,LSTM_size)] = d_total_hs_mat[source_index+d_batch_info[minibatch_size+minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)];
+			}
+		}
+		else {
+			for(int j=threadIdx.x; j < LSTM_size ;j+=blockDim.x) {
+				d_hs_mat[IDX2C(j,i,LSTM_size)] = 0;
+			}
+		}
+	}
+}
+
+
+template<typename dType>
+__global__
+void exp_mask_kernel(int *d_indicies,dType *d_alignments,int minibatch_size,int D) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<minibatch_size*(2*D+1); i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i % minibatch_size;
+		int source_index = d_indicies[i];
+		if(source_index==-1) {
+			d_alignments[i] = 0;
+		}
+		else {
+			d_alignments[i] = exp(d_alignments[i]);
+		}
+	}
+}
+
+/*
+	alignment are stored in the following way:
+	[minibatch, minibatch, minibatch, ...]
+
+	each thread does a reduction for a minibatch
+*/
+
+template<typename dType>
+__global__
+void alignment_reduction_kernel(dType *d_alignments, int LSTM_size,int minibatch_size,int D,dType sigma_sq,dType *d_p_t,int *d_indicies,dType *d_cached_exp) {
+
+	int minibatch_index = threadIdx.x;
+	if(minibatch_index < minibatch_size) {
+		dType sum=0;
+		dType max_val = 0;
+		for(int i=0; i<2*D+1; i++) {
+			if(d_indicies[minibatch_index + minibatch_size*i]!=-1) {
+				if(d_alignments[minibatch_index + minibatch_size*i] > max_val) {
+					max_val = d_alignments[minibatch_index + minibatch_size*i];
+				}
+			}
+		}
+
+		for(int i=0; i<2*D+1; i++) {
+			if(d_indicies[minibatch_index + minibatch_size*i]!=-1) {
+				d_alignments[minibatch_index + minibatch_size*i] = exp(d_alignments[minibatch_index + minibatch_size*i]-max_val);
+				sum+= d_alignments[minibatch_index + minibatch_size*i];
+			}
+			else {
+				d_alignments[minibatch_index + minibatch_size*i] = 0;
+			}
+		}
+
+		for(int i=0; i<2*D+1; i++) {
+			if(d_indicies[minibatch_index + minibatch_size*i]!=-1) {
+				dType temp = exp( ( -1*pow_wrapper( ( d_p_t[minibatch_index] - d_indicies[minibatch_index + minibatch_size*i] ) ,2.0) )/(2*sigma_sq) );
+				
+				if(sum!=0) {
+					d_alignments[minibatch_index + minibatch_size*i] = (d_alignments[minibatch_index + minibatch_size*i]/sum) \
+						*temp;
+				}
+					//*exp( ( -1*pow( (d_p_t[minibatch_index]-d_indicies[minibatch_index + minibatch_size*i]) ,2.0) )/(2*sigma_sq) );
+
+				d_cached_exp[IDX2C(i,minibatch_index,2*D+1)] = temp;
+			}
+			else {
+				d_alignments[minibatch_index + minibatch_size*i] = 0;
+				d_cached_exp[IDX2C(i,minibatch_index,2*D+1)] = 1; //since you divide by this
+			}
+		}
+	}
+}
+
+/*
+	Each block is responsible for multiplying one column of a h_t matrix
+
+	alignments is laid out as:
+	[minibatch] [minibatch] [minibatch] ...
+*/
+template<typename dType>
+__global__
+void create_c_t_kernel(dType *d_alignments,dType *d_hs_mat,dType *d_c_t,int LSTM_size,int minibatch_size,int D) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_c_t[i]=0;
+		int minibatch_index = (i/LSTM_size);
+		for(int j=0; j<2*D+1; j++) {
+			d_c_t[i] +=	d_alignments[minibatch_index + minibatch_size*j] * d_hs_mat[i + LSTM_size*minibatch_size*j];
+		}
+	}
+}
+
+
+template<typename dType>
+__global__
+void add_two_mats_kernel(dType *d_mat1,dType *d_mat2,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_mat1[i] = d_mat1[i] + d_mat2[i];
+	}
+}
+
+
+template<typename dType>
+__global__
+void tanh_grad_kernel(dType *d_output,dType *d_input_Error,dType *d_tanh_val,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_output[i] = d_input_Error[i] * (1- d_tanh_val[i]*d_tanh_val[i]);
+	}
+}	
+
+
+template<typename dType>
+__global__
+void tanh_att_forward_kernel(dType *d_output,dType *d_in1,dType *d_in2,dType *d_bias,int LSTM_size,int minibatch_size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_output[i] = tanh_wrapper(d_in1[i] + d_in2[i] + d_bias[i%LSTM_size]);
+	}
+}
+
+
+#define NUM_ATTENTION_THREADS 128
+//used for the part 2 of the score function
+template<typename dType>
+__global__
+void elem_reduce_kernel(dType *d_h_t,dType *d_Wa_hs_temp, dType *d_alignments, int LSTM_size, int minibatch_size) {
+
+	__shared__ dType buffer[NUM_ATTENTION_THREADS];
+	int minibatch_index = blockIdx.x;
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+	buffer[tid] = 0;
+
+	for(int i=i_start; i<i_end; i+=i_step) {
+		buffer[tid] += d_h_t[IDX2C(i,minibatch_index,LSTM_size)] * d_Wa_hs_temp[IDX2C(i,minibatch_index,LSTM_size)];
+	}
+
+	 __syncthreads();
+
+	 for(int stride=NUM_ATTENTION_THREADS/2; stride>0; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+  	__syncthreads();
+
+	dType sum_k = buffer[0];
+	if(tid==0) {
+		d_alignments[minibatch_index] = sum_k; 
+	}
+}
+
+
+
+
+//this is an improvement over the above kernel as more is done in one kernel launch
+template<typename dType>
+__global__
+void elem_reduce_kernel_large(dType *d_h_t,dType *d_Wa_hs_temp, dType *d_alignments, int LSTM_size, int minibatch_size,int D) {
+
+	__shared__ dType buffer[NUM_ATTENTION_THREADS];
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+
+	for(int minibatch_index = blockIdx.x; minibatch_index<(2*D+1)*minibatch_size; minibatch_index+=gridDim.x) {
+		buffer[tid] = 0;
+
+		for(int i=i_start; i<i_end; i+=i_step) {
+			buffer[tid] += d_h_t[IDX2C(i,minibatch_index,LSTM_size)] * d_Wa_hs_temp[IDX2C(i,minibatch_index%minibatch_size,LSTM_size)];
+		}
+
+		 __syncthreads();
+
+		 for(int stride=NUM_ATTENTION_THREADS/2; stride>0; stride>>=1) {
+			if(tid < stride) {
+				buffer[tid] += buffer[stride + tid];
+			}
+			__syncthreads();
+		}
+
+	  	__syncthreads();
+
+	  	
+		dType sum_k = buffer[0];
+		if(tid==0) {
+			d_alignments[minibatch_index] = sum_k; 
+		}
+		__syncthreads();
+	}
+}
+
+
+
+//used for the part 2 of the score function
+template<typename dType>
+__global__
+void error_alignments_kernel(dType *d_ERRnTOt_ct,dType *d_hs_mat, dType *d_ERRnTOt_as, int LSTM_size, int minibatch_size,int s_index,int D) {
+
+	__shared__ dType buffer[NUM_ATTENTION_THREADS];
+	int minibatch_index = blockIdx.x;
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+	buffer[tid] = 0;
+
+	for(int i=i_start; i<i_end; i+=i_step) {
+		buffer[tid] += d_ERRnTOt_ct[IDX2C(i,minibatch_index,LSTM_size)] * d_hs_mat[IDX2C(i,minibatch_index,LSTM_size)];
+	}
+
+	 __syncthreads();
+
+	 for(int stride=NUM_ATTENTION_THREADS/2; stride>0; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+  	__syncthreads();
+
+  	// normalize the softmax
+	dType sum_k = buffer[0];
+	if(tid==0) {
+		d_ERRnTOt_as[s_index + (2*D+1)*minibatch_index] = sum_k; 
+	}
+}
+
+
+
+//used for the part 2 of the score function
+template<typename dType>
+__global__
+void error_alignments_kernel_large(dType *d_ERRnTOt_ct,dType *d_hs_mat, dType *d_ERRnTOt_as, int LSTM_size, int minibatch_size,int D) {
+
+	__shared__ dType buffer[NUM_ATTENTION_THREADS];
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+
+	for(int minibatch_index = blockIdx.x; minibatch_index<(2*D+1)*minibatch_size; minibatch_index+=gridDim.x) {
+
+		buffer[tid] = 0;
+		int s_index = minibatch_index/minibatch_size;
+		for(int i=i_start; i<i_end; i+=i_step) {
+			buffer[tid] += d_ERRnTOt_ct[IDX2C(i,minibatch_index%minibatch_size,LSTM_size)] * d_hs_mat[IDX2C(i,minibatch_index,LSTM_size)];
+		}
+
+		 __syncthreads();
+
+		 for(int stride=NUM_ATTENTION_THREADS/2; stride>0; stride>>=1) {
+			if(tid < stride) {
+				buffer[tid] += buffer[stride + tid];
+			}
+			__syncthreads();
+		}
+
+	  	__syncthreads();
+
+	  	// normalize the softmax
+		dType sum_k = buffer[0];
+		if(tid==0) {
+			d_ERRnTOt_as[s_index + (2*D+1)*(minibatch_index%minibatch_size)] = sum_k; 
+		}
+		__syncthreads();
+	}
+}
+
+
+
+
+template<typename dType>
+__global__
+void error_pt_kernel(dType *d_ERRnTOt_pt,dType *d_ERRnTOt_as,int D,dType sigma_sq,int *d_indicies,int minibatch_size,dType *d_p_t,dType *d_alignments) {
+
+	__shared__ dType buffer[NUM_ATTENTION_THREADS];
+	int minibatch_index = blockIdx.x;
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = 2*D+1; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+	buffer[tid] = 0;
+
+	for(int i=i_start; i<i_end; i+=i_step) {
+		buffer[tid] += d_ERRnTOt_as[IDX2C(i,minibatch_index,2*D+1)] * d_alignments[IDX2C(minibatch_index,i,minibatch_size)] * ( (d_indicies[minibatch_index + i*minibatch_size] - d_p_t[minibatch_index])/sigma_sq );
+	}
+
+	__syncthreads();
+
+	 for(int stride=NUM_ATTENTION_THREADS/2; stride>0; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+  	__syncthreads();
+
+  	// normalize the softmax
+	dType sum_k = buffer[0];
+	if(tid==0) {
+		d_ERRnTOt_pt[minibatch_index] = sum_k; 
+	}
+}
+
+
+template<typename dType>
+__global__
+void att_vp_error(dType *d_sigma,dType *d_tanh,dType *d_temp_grad,dType *d_ERRnTOt_pt,int *d_batch_info,int LSTM_size,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i/LSTM_size;
+		d_temp_grad[i] = d_ERRnTOt_pt[minibatch_index] * d_sigma[minibatch_index] * (1-d_sigma[minibatch_index]) * d_batch_info[minibatch_index] * d_tanh[i];
+	}
+}
+
+
+template<typename dType>
+__global__
+void grad_W_p_kernel(dType *d_v_p,dType *d_temp,dType *d_sigma,dType *d_tanh,dType *d_ERRnTOt_pt,int *d_batch_info,int LSTM_size,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i/LSTM_size;
+		int LSTM_index = i%LSTM_size;
+		d_temp[i] = d_ERRnTOt_pt[minibatch_index] * d_batch_info[minibatch_index] * d_v_p[LSTM_index] * d_sigma[minibatch_index] * (1-d_sigma[minibatch_index]) * (1 - d_tanh[i]*d_tanh[i]);
+	}
+} 
+
+
+
+//these two parts are for a highly inefficient way
+
+// //part 1 of calculation (positive part)
+// template<typename dType>
+// __global__
+// void prep_ht_Wa_grad_p1(dType *d_h_t,dType *d_temp1,dType *d_alignments,dType *d_ERRnTOt_as,int global_index,int LSTM_size,int minibatch_size,int D) {
+
+// 	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+// 		int minibatch_index = i/LSTM_size;
+// 		d_temp1[i] = d_ERRnTOt_as[IDX2C(global_index,minibatch_index,2*D+1)] * d_alignments[IDX2C(minibatch_index,global_index,minibatch_size)] * d_h_t[i];
+// 	}
+// }
+
+
+
+// //part 2 of calculation (The negative part)
+// //global index is the index outside summation
+// //local index is the index inside summation
+// template<typename dType>
+// __global__
+// void prep_ht_Wa_grad_p2(dType *d_h_t,dType *d_temp1,dType *d_alignments,dType *d_cached_exp,dType *d_ERRnTOt_as,int global_index,int local_index,int LSTM_size,int minibatch_size,int D) {
+
+// 	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+// 		int minibatch_index = i/LSTM_size;
+// 		d_temp1[i] = -1 * d_ERRnTOt_as[IDX2C(global_index,minibatch_index,2*D+1)] *d_alignments[IDX2C(minibatch_index,global_index,minibatch_size)] * ( d_alignments[IDX2C(minibatch_index,local_index,minibatch_size)]/d_cached_exp[IDX2C(local_index,minibatch_index,2*D+1)] ) * d_h_t[i];
+// 	}
+// }
+
+
+
+//faster W_a gradient
+template<typename dType>
+__global__
+void get_ht_scalings_Wa_grad_kernel(dType *d_scalings,dType *d_ERRnTOt_as,dType *d_alignments,dType *d_cached_exp,int D,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<(2*D+1)*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int alignment_index = i%(2*D+1);
+		int minibatch_index = i/(2*D+1);
+		d_scalings[i] = d_ERRnTOt_as[IDX2C(alignment_index,minibatch_index,2*D+1)] * \
+			d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)] * ( 1- \
+			d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)]/ \
+			d_cached_exp[IDX2C(alignment_index,minibatch_index,2*D+1)] );
+		for(int j=0; j<2*D+1; j++) {
+			if(j!=alignment_index) {
+				d_scalings[i] += -1*d_ERRnTOt_as[IDX2C(j,minibatch_index,2*D+1)] * d_alignments[IDX2C(minibatch_index,j,minibatch_size)] * \
+					d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)] / d_cached_exp[IDX2C(alignment_index,minibatch_index,2*D+1)];
+			}
+		}
+	}
+}
+
+
+template<typename dType>
+__global__
+void scale_ht_kernel(dType *d_scalings,dType *d_temp1,dType *d_h_t,int LSTM_size,int minibatch_size,int alignment_index,int D) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i/LSTM_size;
+		d_temp1[i] = d_h_t[i] * d_scalings[IDX2C(alignment_index,minibatch_index,2*D+1)];
+	}
+}
+
+
+//more efficent version of the above kernel
+template<typename dType>
+__global__
+void scale_ht_kernel_large(dType *d_hs_sum,dType *d_hs_mat,dType *d_scalings,int LSTM_size,int minibatch_size,int D) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_hs_sum[i] = 0;
+		int minibatch_index = i/LSTM_size;
+		for(int j=0; j<2*D+1; j++) {
+			d_hs_sum[i] += d_hs_mat[i + LSTM_size*minibatch_size*j] * d_scalings[IDX2C(j,minibatch_index,2*D+1)];
+		}
+	}
+}
+
+
+//each block will copy over one vector to the source side
+template<typename dType>
+__global__
+void copy_errors_source(dType **d_total_hs_error,dType *d_temp_error,int *d_indicies,int LSTM_size,int minibatch_size,int D,int alignment_index,int *d_batch_info) {
+
+	for(int i=blockIdx.x; i < minibatch_size; i+=gridDim.x) {
+		int minibatch_index = i;
+		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+		if(source_index!=-1) {
+			for(int j=threadIdx.x; j < LSTM_size ;j+=blockDim.x) {
+				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_temp_error[IDX2C(j,minibatch_index,LSTM_size)];
+			}
+		}
+	}	
+}
+
+
+
+//get the error for h_s from c_t
+template<typename dType>
+__global__
+void error_hs_ct_kernel(dType *d_ERRnTOt_ct, dType *d_alignments,int *d_indicies,int *d_batch_info,dType **d_total_hs_error,int LSTM_size,int minibatch_size,int D,int alignment_index) {
+
+	for(int i=blockIdx.x; i < minibatch_size; i+=gridDim.x) {
+		int minibatch_index = i;
+		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+		if(source_index!=-1) {
+			for(int j= threadIdx.x; j<LSTM_size; j+=blockDim.x) {
+				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+			}
+		}
+	}
+}
+
+
+//more efficent version of kernel above
+template<typename dType>
+__global__
+void error_hs_ct_kernel_large(dType *d_ERRnTOt_ct, dType *d_alignments,int *d_indicies,int *d_batch_info,dType **d_total_hs_error,int LSTM_size,int minibatch_size,int D) {
+
+	for(int i=blockIdx.x; i < minibatch_size*(2*D+1); i+=gridDim.x) {
+		int minibatch_index = i%minibatch_size;
+		int alignment_index = i/minibatch_size;
+		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+		if(source_index!=-1) {
+			for(int j= threadIdx.x; j<LSTM_size; j+=blockDim.x) {
+				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+			}
+		}
+	}
+}
+
+
+
+template<typename dType>
+__global__
+void gradient_update_mats(dType *d_mat,dType *d_mat_grad,dType learning_rate,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_mat[i]+= learning_rate * d_mat_grad[i];
+	}
+}
+
+
+
+template<typename dType>
+__global__
+void zero_h_t(dType *d_h_t, int *d_01_mask,int LSTM_size,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_h_t[i] *= d_01_mask[i/LSTM_size];
+	}
+}
+
+
+template<typename dType>
+__global__
+void clip_mat_kernel(dType *d_mat,dType threshold,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		if(d_mat[i] > 0) {
+			d_mat[i] = (d_mat[i] > threshold) ? threshold : d_mat[i];
+		}
+		else {
+			d_mat[i] = (d_mat[i] < -threshold) ? -threshold : d_mat[i];
+		}
+	}
+}
+
+
+//-------------------------------------------NCE Stuff ------------------------------------------
+
+#define NUM_NCE_THREADS 128
+
+//copy into temp embeddings
+//num samples is the size of the negative samples shared across a minibatch and the positive samples
+template<typename dType>
+__global__
+void load_in_embeddings(dType *d_temp_embeddings,dType *d_D,int *d_samples,int num_samples,int LSTM_size) {
+
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < num_samples; k+=gridDim.x) {
+		int vocab_index = d_samples[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			d_temp_embeddings[IDX2C(i,k,LSTM_size)] = d_D[IDX2C(i,vocab_index,LSTM_size)];
+		}
+	}
+}
+
+template<typename dType>
+__device__
+inline dType log_add_exp(dType x,dType y) {
+
+	dType min = cuda_min_wrapper(x,y);
+	dType max = cuda_max_wrapper(x,y);
+	return max + cuda_log1p_wrapper(cuda_exp_wrapper(min-max));
+}
+
+//compute -P(true) for all of the elements
+template<typename dType>
+__global__
+void calc_p_true_kernel(dType *d_p_true,dType *d_dot_products,dType *d_sampling_probs,dType *d_b_d,int *d_samples,int num_samples,int minibatch_size,int *d_vocab_indicies_01) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<num_samples*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i%minibatch_size;
+		int sample_index = i/minibatch_size;
+		//printf("%i\n",d_samples[sample_index]);
+		if(d_vocab_indicies_01[minibatch_index]==1) {
+			d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)] = -1*cuda_exp_wrapper( d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]] - \
+				log_add_exp(d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]],d_sampling_probs[sample_index]) ); 
+
+			assert(isinf_wrapper(  log_add_exp(d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]],d_sampling_probs[sample_index])  )==0);
+			// if(d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)]==0) {
+			// 	printf("zero!!!, minibatch_index: %d , sample_index: %d ,   dot_product: %f  ,  d_sampling_probs: %f  logaddexp val: %f \n",minibatch_index,sample_index,\
+			// 		d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]], d_sampling_probs[sample_index] \
+			// 		,log_add_exp(d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]],d_sampling_probs[sample_index]));
+			// }
+		}
+		else {
+			//printf("Setting to zero\n");
+			d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)] = 0;
+		}
+	}		
+}
+
+
+//get the objective value for NCE
+template<typename dType>
+__global__
+void objective_val_p1_NCE_kernel(dType *d_p_true,double *d_OBJ_val_temp,int num_negative_samples,int minibatch_size,int *d_vocab_indicies_01) {
+
+	__shared__ dType buffer[NUM_NCE_THREADS];
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = minibatch_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	int tid = threadIdx.x;
+	buffer[threadIdx.x] = 0;
+
+	for(int k = blockIdx.x; k < num_negative_samples; k+=gridDim.x) {
+		for(int i=i_start; i<i_end; i+= i_step) {
+			if(d_vocab_indicies_01[i]==1) {
+				// if(isinf_wrapper(cuda_log_wrapper(1+d_p_true[IDX2C(i,k,minibatch_size)]))) {
+				// 	printf("Value for inf %f , minibatch_index %d \n",d_p_true[IDX2C(i,k,minibatch_size)],i);
+				// }
+				assert(isinf_wrapper(cuda_log_wrapper(1+d_p_true[IDX2C(i,k,minibatch_size)]))==0);
+				buffer[threadIdx.x] += cuda_log_wrapper(1+d_p_true[IDX2C(i,k,minibatch_size)]);
+			}
+		}
+	}
+
+	__syncthreads();
+
+	for(int stride=NUM_NCE_THREADS/2; stride>0; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+	__syncthreads();
+
+	if(tid==0) {
+		d_OBJ_val_temp[blockIdx.x]=buffer[0];
+	}
+}
+
+
+//get the objective value for NCE
+template<typename dType>
+__global__
+void objective_val_p2_NCE_kernel(dType *d_p_true,double *d_final_NCE_OBJ,double *d_OBJ_val_temp,int num_negative_samples,int minibatch_size,int *d_vocab_indicies_01) {
+
+	for(int i=0; i<NUM_NCE_THREADS; i++) {
+		d_final_NCE_OBJ[0] +=d_OBJ_val_temp[i];
+	}
+
+	for(int i=0; i<minibatch_size; i++) {
+		if(d_vocab_indicies_01[i]==1) {
+			// if(isinf_wrapper(cuda_log_wrapper(-d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]))) {
+			// 	printf("Inf statment, val: %f   minibatch index: %d ",d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)],i);
+			// }
+			assert(isinf_wrapper(cuda_log_wrapper(-d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]))==0);
+			d_final_NCE_OBJ[0]+=cuda_log_wrapper(-d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]);
+		}
+	}
+}
+
+template<typename dType>
+__global__
+void zero_err_ht(dType *d_err_ht,int *d_vocab_indicies_01,int LSTM_size,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_err_ht[i] *= d_vocab_indicies_01[i/LSTM_size];
+	}
+}
+
+
+
+//compute d_err_ht with respect to positive embeddings
+//temp embeddings pointer being passed in skips the beginning negative sample embeddings
+template<typename dType>
+__global__
+void error_ht_positive_kernel(dType *d_d_ERRt_ht,dType *d_p_true,dType *d_temp_embeddings,int num_negative_samples,int LSTM_size,int minibatch_size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i/LSTM_size;
+		int LSTM_index = i%LSTM_size;
+		d_d_ERRt_ht[IDX2C(LSTM_index,minibatch_index,LSTM_size)] += (1 + d_p_true[IDX2C(minibatch_index,num_negative_samples+minibatch_index,minibatch_size)]) * d_temp_embeddings[IDX2C(LSTM_index,minibatch_index,LSTM_size)];
+	}		
+}
+
+
+
+
+//d_samples being passed in is pointing at the positive samples already
+template<typename dType>
+__global__
+void positive_embedding_NCE(dType *d_h_t,dType *d_D_grad,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int *d_vocab_indicies_01) {
+	
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < minibatch_size; k+=gridDim.x) {
+		int vocab_index = d_samples[k];
+		if(d_vocab_indicies_01[k]==1) {
+			for(int i= i_start; i < i_end; i += i_step) {
+				atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_h_t[IDX2C(i,k,LSTM_size)]*(1+d_p_true[IDX2C(k,k,minibatch_size)]));
+			}
+		}
+	}
+}
+
+
+template<typename dType>
+__global__
+void negative_embedding_NCE(dType *d_temp_D_grad,dType *d_D_grad,int *d_samples,int num_negative_samples,int LSTM_size) {
+
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < num_negative_samples; k+=gridDim.x) {
+		int vocab_index = d_samples[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_temp_D_grad[IDX2C(i,k,LSTM_size)]);
+		}
+	}
+}
+
+template<typename dType>
+__global__
+void negative_bias_NCE(dType *d_temp_b_d_grad,dType *d_b_d_grad,int *d_samples,int num_negative_samples) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<num_negative_samples; i+=gridDim.x*blockDim.x) {
+		atomicAdd(&(d_b_d_grad[d_samples[i]]),d_temp_b_d_grad[i]);
+	}
+}
+
+template<typename dType>
+__global__
+void positive_bias_NCE(dType *d_b_d_grad,dType *d_p_true,int *d_samples,int minibatch_size,int num_negative_samples,int *d_vocab_indicies_01) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<minibatch_size; i+=gridDim.x*blockDim.x) {
+		if(d_vocab_indicies_01[i]==1) {
+			atomicAdd(&(d_b_d_grad[d_samples[i+num_negative_samples]]),1+d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]);
+		}
+	}
+}
+
+
+
+//----------------------------------------------- Truncated softmax stuff
+template<typename dType>
+__global__
+void load_in_embeddings_trunc(dType *d_temp_embeddings,dType *d_D,int *d_samples,int num_samples,int LSTM_size) {
+
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < num_samples; k+=gridDim.x) {
+		int vocab_index = d_samples[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			d_temp_embeddings[IDX2C(i,k,LSTM_size)] = d_D[IDX2C(i,vocab_index,LSTM_size)];
+		}
+	}
+}
+
+
 #endif
+
+
+
+
+
+
+
+
+
+
+
+
+
 

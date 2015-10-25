@@ -7,123 +7,95 @@
 #include "Eigen_Util.h"
 
 #include "model.h"
-#include "Hidden_To_Hidden_Layer.h"
 
 //Forward declaration
 template<typename dType>
-struct neuralMT_model;
+class neuralMT_model;
 
-struct Hidden_To_Hidden_Layer;
+template<typename dType>
+class Hidden_To_Hidden_Layer;
 
-struct LSTM_HH_Node {
-	//Stored after forward propagation
-	//These have dimension (hidden state size)x(size of minibatch)
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> i_t;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> f_t;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> c_t;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> c_prime_t_tanh;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> o_t;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> h_t;
+template<typename dType>
+class LSTM_HH_Node {
+public:
 
-	//Needed for forward propagation
-	//These have dimension (hidden state size)x(size of minibatch)
-	//There are being passed from the left node
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> h_t_prev; //h_(t-1)
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> c_t_prev; //c_(t-1)
+	//--------------------------------------------------GPU parameters------------------------------------
+	int minibatch_size;
+	int LSTM_size;
+	int index; //what node is this
+	bool attention_model = false; //this will only be true for the upper layer on the target side of the LSTM
 
-	//These are being passed from below
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> h_t_prev_b; //h_(t-1)
-
-
-	//This is the length of the minibatch
-	//Each index ranges from 0 to (input vocab size-1), in order to select matrix column from embedding layer
-	//This is for softmax
-	Eigen::Matrix<int,Eigen::Dynamic,1> vocab_indices_output;
+	bool dropout;
+	dType dropout_rate;
+	dType *d_dropout_mask;
 
 	//Pointer to the model struct, so it can access all of the weight matrices
-	Hidden_To_Hidden_Layer *model;
+	Hidden_To_Hidden_Layer<precision> *model;
 
-	//This is the derivative of the error from time n to time t with respect to h_t
-	//Has size (minibatch size)x(hidden state size)
-	//This gets passed the the LSTM block below it
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_htM1_b;
+	//host pointers
+	dType *h_d_ERRt_ht;
+	dType *h_o_t;
+	dType *h_c_t;
+	int *h_input_vocab_indices_01;
+	dType *h_f_t;
+	dType *h_c_t_prev;
+	dType *h_c_prime_t_tanh;
+	dType *h_i_t;
+	dType *h_h_t_prev;
+	dType *h_h_t;
 
+	//device pointers
+	dType *d_d_ERRnTOtp1_ht;
+	dType *d_d_ERRnTOtp1_ct;
+	dType *d_d_ERRt_ht;
+	dType *d_o_t;
+	dType *d_c_t;
+	int *d_input_vocab_indices_01;
+	dType *d_f_t;
+	dType *d_c_t_prev;
+	dType *d_c_prime_t_tanh;
+	dType *d_i_t;
+	dType *d_h_t_prev;
+	dType *d_h_t;
+	
 
-	//These store the derivatives of errors for back propagation
+	dType *h_h_t_below;
+	dType *d_h_t_below;
 
-	//This is the derivative of the error from time n to time t with respect to h_t
-	//Has size (minibatch size)x(hidden state size)
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_ht;
+	dType *d_zeros;
 
-	//This is the derivative of the error from time n to time t with respect to o_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_ot;
-
-	//This is the derivative of the error from time n to time t with respect to c_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_ct;
-
-	//This is the derivative of the error at time t with respect to c_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRt_ct;
-
-	//This is the derivative of the error from time n to time t with respect to f_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_ft;
-
-	//This is the derivative of the error from time n to time t with respect to tanhc'_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_tanhcpt;
-
-	//This is the derivative of the error from time n to time t with respect to i_t
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_it;
-
-	//This is the derivative of the error from time n to t with respect to h_(t-1)
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_htM1;
-
-	//This is the derivative of the error from time n to t with respect to c_(t-1)
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> d_ERRnTOt_ctM1;
-
-	//Used for precomputing, for solving for the W matrix
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> Z_i;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> Z_f;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> Z_o;
-	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> Z_c;
+	dType *d_ERRnTOt_h_tild;
+	dType *d_h_tild;
 
 
 	//Constructor
-	LSTM_HH_Node(int LSTM_size,int minibatch_size,int vocab_size,struct Hidden_To_Hidden_Layer *m);
+	LSTM_HH_Node(int LSTM_size,int minibatch_size,struct Hidden_To_Hidden_Layer<dType> *m,int index,dType *d_zeros, bool dropout, 
+		dType dropout_rate);
 
-	//Update the hidden state and cell state vectors
-	template<typename Derived>
-	void update_vectors_forward(const Eigen::MatrixBase<Derived> &h_prev,
-		const Eigen::MatrixBase<Derived> &c_prev,const Eigen::MatrixBase<Derived> &h_prev_b);
+	void init_LSTM_GPU(int LSTM_size,int minibatch_size,struct Hidden_To_Hidden_Layer<dType> *m);
 
-	//For input embedding layer
-	//Pass in the weight matrix for the embedding layer 
-	//Need to multithread later
-	template<typename Derived>
-	void compute_temp_mat(const Eigen::MatrixBase<Derived> &W_mat);
+	void update_vectors_forward_GPU(int *d_input_vocab_indices_01,
+		dType *d_h_t_prev,dType *d_c_t_prev);
 
 	//Compute the forward values for the LSTM node
 	//This is after the node has recieved the previous hidden and cell state values
 	void forward_prop();
+	void forward_prop_GPU();
 
+	void forward_prop_sync(cudaStream_t &my_s);
 
-	//Update the output vocab indicies
-	template<typename Derived>
-	void update_vectors_backward(const Eigen::MatrixBase<Derived> &vocab,int index);
-
-	//Does back propagation for the nodes
-	//Pass in the error from positions n to t+1 with respect to h_t
-	template<typename Derived>
-	void back_prop(const Eigen::MatrixBase<Derived> &d_ERRnTOtp1_ht,const Eigen::MatrixBase<Derived> &d_ERRnTOtp1_ct,const Eigen::MatrixBase<Derived> &d_ERRt_ht);
-
-
-	//Called for the gradient update for input embedding layer
-	template<typename Derived, typename Derived2>
-	void sparseGradUpdate(const Eigen::MatrixBase<Derived> &grad_const, const Eigen::MatrixBase<Derived2> &d_Err);
+	void back_prop_GPU(int index);
 
 	//Update the gradient matrices
-	void update_gradients();
+	void compute_gradients_GPU();
 
-	//Compute the gradient for the W matrix, has seperate function because it is messy
-	void compute_W_gradient();
+	void backprop_prep_GPU(dType *d_d_ERRnTOtp1_ht,dType *d_d_ERRnTOtp1_ct);
+
+	void update_vectors_forward_decoder(int *d_input_vocab_indices_01);
+
+	void dump_LSTM(std::ofstream &LSTM_dump_stream,std::string intro);
+
+	void send_h_t_above();
 };
 
 #endif

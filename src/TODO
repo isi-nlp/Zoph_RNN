@@ -1,0 +1,38 @@
+TODO/Notes
+
+This is Barret Zoph's code for an end-to-end neural MT system
+
+
+NOTES:
+- Train and validation files have 2 blanks lines followed by target input for LM, since same code for the language model only
+- 0 must be start symbol due to decoding (never allow this to be predicted)
+- 1 must also be the EOF symbol
+- You can only print LSTM traces during decoding
+
+
+
+TODO:
+- Put in truncated softmax
+- Debug Attention model
+- Remove streams
+- Make LSTM one big matrix multiplication
+- Speed up attention model so no for loops
+- Put in attention model for decoding
+
+
+
+UNK_REPLACE:
+- You do not need the unk replace flag for ensembling
+
+
+
+OTHER:
+- Turn off asserts before doing a big run (On GPU and CPU)
+
+
+
+
+USEFUL SCRIPTS:
+
+lowercase:
+tr '[:upper:]' '[:lower:]'

@@ -5,35 +5,16 @@
 #include "Eigen_Util.h"
 #include "gpu_info_struct.h"
 #include "base_layer.h"
+#include "softmax_node.h"
+#include "transfer_layer.h"
+#include "base_loss.h"
 
 template<typename dType>
-class softmax_layer {
+class softmax_layer : public base_loss_layer<dType> {
 public:
-	//Vector that contains the distribution over the entire output vocabulary
-	//Size (output vocab size)x(minibatch size)
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> outputDist;
 
-	//This is the normalization constant for the softmax
-	//Size is 1x(minibatch size)
-	Eigen::Matrix<dType, 1, Eigen::Dynamic> normalization;
+	//Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> d_ERRt_ht;
 
-	//This is the derivative of the error at time t with respect to h_t
-	//Has size (minibatch size)x(hidden state size)
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> d_ERRt_ht;
-
-	//Parameters needed to connect hidden to output layer
-	//Dimension (output word vocab)x(hidden state size)
-	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> D;
-
-	//bias for the output embedding layer
-	//Dimension (output vocab size)x(1)
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_d;
-
-	//Parameters needed to connect hidden to output layer
-	//Dimension (output word vocab)x(hidden state size)
-	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic> D_grad;
-
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_d_grad;
 
 
 	//-----------------------------------------GPU parameters-------------------------------------------
@@ -129,111 +110,103 @@ public:
 	dType learning_rate;
 	bool scaled;
 
+	//dropout stuff
+	bool dropout;
+	dType dropout_rate;
+
 	neuralMT_model<precision> *model;
 
 	bool train_perplexity;
 
-	void init_softmax_layer(int output_vocab_size,int minibatch_size,
-		struct neuralMT_model<precision> *model,dType norm_clip,int LSTM_size, bool clip_gradients,dType learning_rate,
-		int longest_sent,bool scaled,bool train_perplexity,bool truncated_softmax,int shortlist_size,int sampled_size); 
+	lower_transfer_layer<dType> lower_layer;
 
-	void init_softmax_layer_CPU(int output_vocab_size,int minibatch_size,
-	struct neuralMT_model<precision> *model,dType norm_clip,int LSTM_size, bool clip_gradients,dType learning_rate);
+	std::vector<softmax_node<dType>> nodes;
+
+	curandGenerator_t rand_gen;
+
+	softmax_layer() {};
+
+	void init_loss_layer(struct neuralMT_model<precision> *model,global_params &params); 
 
 	void init_softmax_layer_GPU(int output_vocab_size,int minibatch_size,
 	struct neuralMT_model<precision> *model,dType norm_clip,int LSTM_size, bool clip_gradients,dType learning_rate,int longest_sent);
 
-	void clear_normalization();
-
 	void clear_gradients();
-	void clear_gradients_CPU();
 	void clear_gradients_GPU();
 
+	void forward_prop(int index);
+	void forward_prop_GPU(int index);
+
+	void back_prop1(int index);
+	void back_prop1_GPU(int index);
+
+	void back_prop2(int index);
+	void back_prop2_GPU(int index);
+
 	void update_weights();
-	void update_weights_CPU();
 	void update_weights_GPU();
 
+	void calculate_global_norm();
+	void update_global_params();
+
 	void dump_weights(std::ofstream &output);
-	void dump_weights_CPU(std::ofstream &output);
 	void dump_weights_GPU(std::ofstream &output);
 
 	void load_weights(std::ifstream &input);
-	void load_weights_CPU(std::ifstream &input);
 	void load_weights_GPU(std::ifstream &input);
 
 	void check_all_gradients(dType epsilon);
-	void check_all_gradients_CPU(dType epsilon);
 	void check_all_gradients_GPU(dType epsilon);
 
-	void get_perplexity_GPU(); 
+	void get_perplexity_GPU(dType *d_h_t,int index); 
 
 	int stoic_generation(dType *h_outputdist,dType *d_outputdist,double temperature);
 
-	//For softmax calculation
-	template <typename Derived>
-	void softmax_calc(const Eigen::MatrixBase<Derived> &h_t);
+	void get_distribution_GPU(int output_vocab_size,dType *d_outputdist,dType *d_D,dType *d_b_d,dType *d_h_t);
 
-	//gets the distribution over the current word, given the current hidden vector
-	//naive implementation, parallelize later
-	template<typename Derived>
-	void getDist(const Eigen::MatrixBase<Derived> &h_t);
+	void get_h_t_gradient_GPU(int output_vocab_size,dType *d_D,dType *d_outputdist,dType *d_d_ERRt_ht,int index);
 
-	void get_distribution_GPU(int output_vocab_size,dType *d_outputdist,dType *d_D,dType *d_b_d);
-
-	void get_h_t_gradient_GPU(int output_vocab_size,dType *d_D,dType *d_outputdist);
-
-	void compute_D_gradient_GPU(int output_vocab_size,dType *d_outputdist,dType *d_D_grad);
+	void compute_D_gradient_GPU(int output_vocab_size,dType *d_outputdist,dType *d_D_grad,dType *d_h_t);
 
 	void compute_b_d_gradient_GPU(int output_vocab_size,dType *d_outputdist,dType *d_b_d_grad);
 
-	//Non multithreaded, need to parallelize later
-	template<typename Derived,typename Derived2>
-	void compute_gradient(const Eigen::MatrixBase<Derived> &h_t,
-		const Eigen::MatrixBase<Derived2> &vocab_indicies);
+	// //Non multithreaded, need to parallelize later
+	// template<typename Derived,typename Derived2>
+	// void compute_gradient(const Eigen::MatrixBase<Derived> &h_t,
+	// 	const Eigen::MatrixBase<Derived2> &vocab_indicies,int index);
 
-	template<typename Derived,typename Derived2>
-	void compute_gradient_CPU(const Eigen::MatrixBase<Derived> &h_t,
-		const Eigen::MatrixBase<Derived2> &vocab_indicies);
-
-	void compute_gradient_GPU();
+	void compute_gradient_GPU(int index);
 
 	//void compute_gradient_GPU(int *h_output_vocab_indicies_target,int current_target_length);
-
-	template<typename Derived,typename Derived2>
-	double compute_loss(const Eigen::MatrixBase<Derived> &h_t,const Eigen::MatrixBase<Derived2> &vocab_indicies);
-
-	template<typename Derived,typename Derived2>
-	double compute_loss_CPU(const Eigen::MatrixBase<Derived> &h_t,const Eigen::MatrixBase<Derived2> &vocab_indicies);
-
-	double compute_loss_GPU();
-
-	template<typename Derived,typename Derived2>
-	void compute_D_gradient(const Eigen::MatrixBase<Derived> &h_t_const,const Eigen::MatrixBase<Derived2> &vocab_indicies);
-
-	template<typename Derived,typename Derived2>
-	void compute_b_d_gradient(const Eigen::MatrixBase<Derived> &h_t_const,const Eigen::MatrixBase<Derived2> &vocab_indicies);
-
-	template<typename Derived>
-	void initMatrix(const Eigen::MatrixBase<Derived> &input_const);
-
-	template<typename Derived,typename Derived3>
-	void check_gradient(dType epsilon,const Eigen::MatrixBase<Derived3> &parameter_const,const Eigen::MatrixBase<Derived> &grad);
+	double compute_loss_GPU(int index);
 
 	void check_gradient_GPU(dType epsilon,dType *d_mat,dType *d_grad,int rows,int cols);
 	//convert to 0/1's and to indicies where there are no -1's
 	void prep_GPU_vocab_indices(int *h_output_vocab_indicies_target,int current_target_length);
 
-	//Get h_t from the previous layer, which lies on a different GPU
-	void get_h_t_DMA(dType *d_h_t); //This transfers from GPU to GPU going from device(0) (input layer) to device 1 (softmax)
+	void backprop_prep_GPU(dType *d_h_t,int step);
 
-	void get_h_t_CPU(dType *d_h_t); //transfers this memory to CPU then to the GPU device(1) where the softmax parameters live
-
-	void get_h_t_NOTHING(dType *d_h_t); //no transfers necessary because all the stuff lies on 1 GPU
-
-	void backprop_prep_GPU(dType *d_h_t,int *d_output_vocab_indices_single,int *d_output_vocab_indices_01_single,
-		dType *d_output_vocab_indices_01_float_single);
+	void backprop_prep_GPU_mgpu(int step);
 
 	void dump_probs(std::ofstream &LSTM_dump_stream);
+
+	void update_learning_rate(dType learning_rate);
+
+	double get_train_perplexity();
+
+	void get_distribution_GPU_decoder_wrapper();
+
+	softmax_layer_gpu_info gpu_init(int device_number);
+
+	void init_lower_transfer_layer(bool lower_input,bool copy_d_Err_ht,Input_To_Hidden_Layer<dType> *input_layer,Hidden_To_Hidden_Layer<dType> *hidden_layer);
+
+	dType *get_ht_ptr(int index);
+
+	void set_ht_ptr(int index,dType *d_h_t);
+
+	cudaEvent_t get_ERR_ht_event();
+
+	dType *get_dist_ptr();
 };
 
 #endif

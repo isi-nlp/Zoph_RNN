@@ -59,6 +59,9 @@ struct file_helper {
 	int len_source_Wgrad;
 	int len_target_Wgrad;
 
+	//for the attention model
+	int *h_batch_info;
+
 	//for perplexity
 	int total_target_words;
 
@@ -86,6 +89,8 @@ struct file_helper {
 
 		free(h_input_vocab_indicies_source_Wgrad);
 		free(h_input_vocab_indicies_target_Wgrad);
+
+		free(h_batch_info);
 
 		input_file.close();
 	}
@@ -338,18 +343,14 @@ struct file_helper {
 		this->shortlist_size = shortlist_size;
 		h_sampled_indices = (int *)malloc(sampled_size * sizeof(int));
 
+		h_batch_info = (int *)malloc(2*minibatch_size * sizeof(int));
+
 	}
 
 	//Read in the next minibatch from the file
 	//returns bool, true is same epoch, false if now need to start new epoch
 	bool read_minibatch() {
 
-		#ifdef CPU_DEBUG
-		std::vector<std::vector<int>*> temp_minibatch_tokens_source_input; //Each vector is the tokens for each sentence
-		std::vector<std::vector<int>*> temp_minibatch_tokens_source_output; //Each vector is the tokens for each sentence
-		std::vector<std::vector<int>*> temp_minibatch_tokens_target_input; //Each vector is the tokens for each sentence
-		std::vector<std::vector<int>*> temp_minibatch_tokens_target_output; //Each vector is the tokens for each sentence
-		#endif
 		int max_sent_len_source = 0;
 		int max_sent_len_target = 0;
 		bool sameEpoch = true;
@@ -376,19 +377,11 @@ struct file_helper {
 			std::string temp_output_source;
 			std::getline(input_file, temp_input_source);
 			std::getline(input_file, temp_output_source);
-			#ifdef CPU_DEBUG
-			std::vector<int>* temp_input_sentence_source = new std::vector<int>;
-			std::vector<int>* temp_output_sentence_source = new std::vector<int>;
-			#endif
 
 			std::string temp_input_target;
 			std::string temp_output_target;
 			std::getline(input_file, temp_input_target);
 			std::getline(input_file, temp_output_target);
-			#ifdef CPU_DEBUG
-			std::vector<int>* temp_input_sentence_target = new std::vector<int>;
-			std::vector<int>* temp_output_sentence_target = new std::vector<int>;
-			#endif
 
 			///////////////////////////////////Process the source////////////////////////////////////
 			std::istringstream iss_input_source(temp_input_source, std::istringstream::in);
@@ -398,9 +391,6 @@ struct file_helper {
 			int input_source_length = 0;
 			while( iss_input_source >> word ) {
 				//std::cout << word << " ";
-				#ifdef CPU_DEBUG
-				temp_input_sentence_source->push_back(std::stoi(word));
-				#endif
 				h_input_vocab_indicies_source_temp[current_temp_source_input_index] = std::stoi(word);
 				input_source_length+=1;
 				current_temp_source_input_index+=1;
@@ -409,9 +399,6 @@ struct file_helper {
 			int output_source_length = 0;
 			while( iss_output_source >> word ) {
 				//std::cout << word << " ";
-				#ifdef CPU_DEBUG
-				temp_output_sentence_source->push_back(std::stoi(word));
-				#endif
 				h_output_vocab_indicies_source_temp[current_temp_source_output_index] = std::stoi(word);
 				output_source_length+=1;
 				current_temp_source_output_index+=1;
@@ -423,12 +410,6 @@ struct file_helper {
 			words_in_minibatch+=input_source_length;
 			max_sent_len_source = input_source_length;
 
-
-			#ifdef CPU_DEBUG
-			temp_minibatch_tokens_source_input.push_back(temp_input_sentence_source);
-			temp_minibatch_tokens_source_output.push_back(temp_output_sentence_source);
-			#endif
-
 			///////////////////////////////////Process the target////////////////////////////////////
 			std::istringstream iss_input_target(temp_input_target, std::istringstream::in);
 			std::istringstream iss_output_target(temp_output_target, std::istringstream::in);
@@ -436,9 +417,6 @@ struct file_helper {
 			int input_target_length = 0;
 			while( iss_input_target >> word ) {
 				//std::cout << word << " ";
-				#ifdef CPU_DEBUG
-				temp_input_sentence_target->push_back(std::stoi(word));
-				#endif
 				h_input_vocab_indicies_target_temp[current_temp_target_input_index] = std::stoi(word);
 				current_temp_target_input_index+=1;
 				input_target_length+=1;
@@ -447,9 +425,6 @@ struct file_helper {
 			int output_target_length = 0;
 			while( iss_output_target >> word ) {
 				//std::cout << word << " ";
-				#ifdef CPU_DEBUG
-				temp_output_sentence_target->push_back(std::stoi(word));
-				#endif
 				h_output_vocab_indicies_target_temp[current_temp_target_output_index] = std::stoi(word);
 				current_temp_target_output_index+=1;
 				output_target_length+=1;
@@ -467,11 +442,6 @@ struct file_helper {
 			words_in_minibatch += input_target_length; 
 			max_sent_len_target = input_target_length;
 
-			#ifdef CPU_DEBUG
-			temp_minibatch_tokens_target_input.push_back(temp_input_sentence_target);
-			temp_minibatch_tokens_target_output.push_back(temp_output_sentence_target);
-			#endif
-
 			//Now increase current line in file because we have seen two more sentences
 			current_line_in_file+=4;
 		}
@@ -485,30 +455,17 @@ struct file_helper {
 		//reset for GPU
 		words_in_minibatch = 0;
 
-		//Now fill in the minibatch_tokens_input and minibatch_tokens_output
-		#ifdef CPU_DEBUG
-		minibatch_tokens_source_input.resize(minibatch_size,max_sent_len_source);
-		minibatch_tokens_source_output.resize(minibatch_size,max_sent_len_source);
-		minibatch_tokens_target_input.resize(minibatch_size,max_sent_len_target);
-		minibatch_tokens_target_output.resize(minibatch_size,max_sent_len_target);
-		#endif
-
-		#ifdef CPU_DEBUG
-		for(int i=0; i<temp_minibatch_tokens_source_input.size(); i++) {
-			for(int j=0; j< temp_minibatch_tokens_source_input[i]->size(); j++) {
-				minibatch_tokens_source_input(i,j) = temp_minibatch_tokens_source_input[i]->at(j);
-				minibatch_tokens_source_output(i,j) = temp_minibatch_tokens_source_output[i]->at(j);
-			}
-			//Now deallocate the vectors
-			delete temp_minibatch_tokens_source_input[i];
-			delete temp_minibatch_tokens_source_output[i];
-		}
-		#endif
-
 		//get vocab indicies in correct memory layout on the host
 		//std::cout << "-------------------source input check--------------------\n";
 		for(int i=0; i<minibatch_size; i++) {
+			int STATS_source_len = 0;
 			for(int j=0; j<current_source_length; j++) {
+
+				//stuff for getting the individual source lengths in the minibatch
+				if(h_input_vocab_indicies_source_temp[j + current_source_length*i]!=-1) {
+					STATS_source_len+=1;
+				}
+
 				h_input_vocab_indicies_source[i + j*minibatch_size] = h_input_vocab_indicies_source_temp[j + current_source_length*i];
 				h_output_vocab_indicies_source[i + j*minibatch_size] = h_output_vocab_indicies_source_temp[j + current_source_length*i];
 				if(h_input_vocab_indicies_source[i + j*minibatch_size]!=-1) {
@@ -517,23 +474,15 @@ struct file_helper {
 				//std::cout << h_input_vocab_indicies_source[i + j*minibatch_size] << "   " << minibatch_tokens_source_input(i,j) << "\n";
 				//std::cout << h_output_vocab_indicies_source[i + j*minibatch_size] << "   " << minibatch_tokens_source_output(i,j) << "\n";
 			}
+			h_batch_info[i] = STATS_source_len;
+			h_batch_info[i+minibatch_size] = current_source_length - STATS_source_len;
 		}
-		//std::cout << "\n\n";
 
-		#ifdef CPU_DEBUG
-		for(int i=0; i<temp_minibatch_tokens_target_input.size(); i++) {
-			for(int j=0; j< temp_minibatch_tokens_target_input[i]->size(); j++) {
-				minibatch_tokens_target_input(i,j) = temp_minibatch_tokens_target_input[i]->at(j);
-				// if(minibatch_tokens_target_input(i,j)!=-1) {
-				// 	words_in_minibatch+=1;
-				// }
-				minibatch_tokens_target_output(i,j) = temp_minibatch_tokens_target_output[i]->at(j);
-			}
-			//Now deallocate the vectors
-			delete temp_minibatch_tokens_target_input[i];
-			delete temp_minibatch_tokens_target_output[i];
-		}
-		#endif
+		// std::cout << "TESTING INPUT IN FILE HELPER\n";
+		// for(int i=0; i<2*minibatch_size; i++) {
+		// 	std::cout << h_batch_info[i] << " ";
+		// }
+		// std::cout << "\n\n";
 
 		//std::cout << "-------------------target input check--------------------\n";
 		for(int i=0; i<minibatch_size; i++) {

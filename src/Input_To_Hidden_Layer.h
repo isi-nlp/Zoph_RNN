@@ -5,128 +5,46 @@
 template<typename dType>
 class neuralMT_model;
 
+#include "transfer_layer.h"
 
 template<typename dType>
 class Input_To_Hidden_Layer {
 public:
 	//Parameters for the model
 	//The parameters need to connect input to input gate
-
-	//New parameters for google model
-	//Dimension (hidden state size)x(input vocab size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W;
-
-	//These multiply the W matrix
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c;
-
-	//previous hidden state vector to input gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hi;
-
-	//bias for the input gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i;
-
-
-	//The parameters needed to connect input to forget gate
-
-	//previous hidden state to forget gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hf;
-
-	//bias for the forget gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f;
-
-
-	//The parameters needed to connect input to cell state
-
-	//previous hidden state to cell gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hc;
-
-	//bias for cell gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c;
-
-
-
-	//Parameters needed to connect input to output gate
-
-	//previous hidden state to forget gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_ho;
-
-	//bias for the forget gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o;
 
 	/////////////////////////////////Stores the gradients for the models/////////////////////////////////
-
-	//The parameters need to connect input to input gate
-
-	//previous hidden state vector to input gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hi_grad;
-
-	//bias for the input gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i_grad;
-
-
-	//The parameters needed to connect input to forget gate
-
-	//previous hidden state to forget gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hf_grad;
-
-
-	//bias for the forget gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f_grad;
-
-
-	//The parameters needed to connect input to cell state
-
-	//previous hidden state to cell gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hc_grad;
-
-	//bias for cell gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c_grad;
-
-
-	//Parameters needed to connect input to output gate
-
-	//previous hidden state to forget gate
-	//Dimension (hidden state size)x(hidden state size)
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_ho_grad;
-
-
-	//bias for the forget gate
-	//Dimension (hidden state size)x(1)
 	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o_grad;
-
-
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_grad;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i_grad;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f_grad;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o_grad;
 	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c_grad;
 
-
 	/////////////////////////////////Current minibatch info for the model///////////////////////////////////
 	std::vector<LSTM_IH_Node<dType>> nodes; //Stores all the LSTM nodes for forward and backward propagation
-
 	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_hidden_vector; //Initial hidden state vector
 	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_cell_vector; //Initial cell vector for LSTM
-
-	//initial backprop errors to pass
 	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ht; 
 	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ct;
 
@@ -135,7 +53,7 @@ public:
 
 	//---------------------------------------------GPU parameters---------------------------------------------
 
-	input_layer_gpu_info ih_layer_info;
+	layer_gpu_info ih_layer_info;
 	
 	//host pointers
 	dType *h_temp1;
@@ -267,6 +185,21 @@ public:
 	dType *d_temp7;
 	dType *d_temp8;
 
+	dType *d_temp9;
+	dType *d_temp10;
+	dType *d_temp11;
+	dType *d_temp12;
+
+	//these are for the feed input connections
+	dType *d_Q_i;
+	dType *d_Q_f;
+	dType *d_Q_o;
+	dType *d_Q_c;
+	dType *d_Q_i_grad;
+	dType *d_Q_f_grad;
+	dType *d_Q_o_grad;
+	dType *d_Q_c_grad;
+
 
 	//new for saving space in the LSTM
 	dType *h_d_ERRnTOt_ht;
@@ -300,6 +233,11 @@ public:
 	thrust::device_ptr<dType> thrust_d_M_o_grad;
 	thrust::device_ptr<dType> thrust_d_M_c_grad;
 
+	thrust::device_ptr<dType> thrust_d_Q_i_grad;
+	thrust::device_ptr<dType> thrust_d_Q_f_grad;
+	thrust::device_ptr<dType> thrust_d_Q_o_grad;
+	thrust::device_ptr<dType> thrust_d_Q_c_grad;
+
 	//remove then put in custom reduction kernel
 	thrust::device_ptr<dType> thrust_d_W_grad;
 
@@ -326,44 +264,48 @@ public:
 	int LSTM_size;
 	int longest_sent;
 	int input_vocab_size;
+	attention_layer<dType> *attent_layer=NULL;
+	bool feed_input = false;
 
+	//for dropout
+	bool dropout;
+	dType dropout_rate;
+	curandGenerator_t rand_gen;
+
+	//for gpu to gpu transfers
+	upper_transfer_layer<dType> upper_layer;
 
 	///////////////////////////////////////////Function Declarations///////////////////////////////
+	Input_To_Hidden_Layer() {};
 
 	//Constructor
 	void init_Input_To_Hidden_Layer(int LSTM_size,int minibatch_size,int vocab_size,
- 		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed);
-
-	void init_Input_To_Hidden_Layer_CPU(int LSTM_size,int minibatch_size,int vocab_size,
- 		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed);
+ 		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed,
+ 		bool dropout,dType dropout_rate);
 
 	void init_Input_To_Hidden_Layer_GPU(int LSTM_size,int minibatch_size,int vocab_size,
  		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed);
 
 	//Clear the previous gradients
 	void clear_gradients(bool init);
-	void clear_gradients_CPU();
 	void clear_gradients_GPU(bool init);
 
 	//Update the weights of the model
 	void update_weights();
-	void update_weights_CPU();
 	void update_weights_GPU();
 
+	void calculate_global_norm();
+	void update_global_params();
+
 	void check_all_gradients(dType epsilon);
-	void check_all_gradients_CPU(dType epsilon);
 	void check_all_gradients_GPU(dType epsilon);
 	
 	void dump_weights(std::ofstream &output);
-	void dump_weights_CPU(std::ofstream &output);
 	void dump_weights_GPU(std::ofstream &output);
 
 	void load_weights(std::ifstream &input);
-	void load_weights_CPU(std::ifstream &input);
 	void load_weights_GPU(std::ifstream &input);
 
-	template<typename Derived>
-	void initMatrix(const Eigen::MatrixBase<Derived> &input_const);
 
 	template<typename Derived,typename Derived3>
 	void check_gradient(dType epsilon,const Eigen::MatrixBase<Derived3> &parameter_const,const Eigen::MatrixBase<Derived> &grad);
@@ -383,6 +325,16 @@ public:
 	void transfer_decoding_states(const Eigen::MatrixBase<Derived> &s_h_t,const Eigen::MatrixBase<Derived> &s_c_t);
 
 	void transfer_decoding_states_GPU(dType *d_h_t,dType *d_c_t);
+
+	void init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model);
+
+	void zero_attent_error();
+
+	void init_feed_input(Hidden_To_Hidden_Layer<dType> *hidden_layer);
+
+	void scale_gradients();
+
+	void update_params();
 };
 
 

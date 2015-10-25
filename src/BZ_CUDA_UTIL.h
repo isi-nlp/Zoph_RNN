@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real.hpp>
+#include "boost/random.hpp"
+#include "boost/generator_iterator.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 #include <stdio.h>   
@@ -16,29 +18,134 @@
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/transform.h>
+#include <curand.h>
 #include <thrust/iterator/constant_iterator.h>
 #include "cuda_profiler_api.h"
 
 //This is used since all cuBLAS storage is column major
 #define IDX2C(i,j,ld) (((j)*(ld))+(i))
 
+
+//namespace to hold constants
 namespace BZ_CUDA {
+
 boost::random::mt19937 gen;
 double lower = -0.08;
 double upper = 0.08;
+
+bool global_clip_flag = false;
+precision global_norm = 0; //the global norm for gradient clipping
+precision global_norm_threshold;
+
+
+//clip errors with respect to h_t and c_t
+bool clip_cell = false;
+precision cell_clip_threshold = 50;
+precision error_clip_threshold = 1000;
+
+
+//grad clipping
+bool individual_grad_clip = false;
+precision ind_norm_clip_thres = 0.1;
+
+//partition function calculation for NCE
+bool print_partition_function = false;
+std::vector<double> full_partition_vals; //all the partition function values
+
+void print_partition_stats() {
+	double total_sum = 0;
+	double mean = 0;
+	double variance = 0;
+
+	for(int i=0; i<full_partition_vals.size(); i++) {
+		total_sum+=full_partition_vals[i];
+	}
+	mean = total_sum/full_partition_vals.size();
+
+	for(int i=0; i<full_partition_vals.size(); i++) {
+		variance+= (full_partition_vals[i] - mean)*(full_partition_vals[i] - mean);
+	}
+
+	variance = variance/full_partition_vals.size();
+
+	std::cout << "\n-------------------NCE PARTITION STATS------------------\n";
+	std::cout << "Partition mean: " << mean << "\n";
+	std::cout << "Partition function standard deviation: " << std::sqrt(variance) << "\n\n\n";
+
+	full_partition_vals.clear();
 }
+
+
+} //BZ_CUDA namespace
+
+
+
+
+
 #define UNCONST(t,c,uc) Eigen::MatrixBase<t> &uc = const_cast<Eigen::MatrixBase<t>&>(c);
 
+// void CUDA_ERROR_WRAPPER(cudaError_t cudaStat,std::string error_message) {
+// 	if (cudaStat != cudaSuccess) {
+// 		std::cout << error_message << std::endl;
+// 		exit (EXIT_FAILURE);
+// 	}
+// }
+
+
 void CUDA_ERROR_WRAPPER(cudaError_t cudaStat,std::string error_message) {
-	if (cudaStat != cudaSuccess) {
-		std::cout << error_message << std::endl;
+
+	if ( cudaSuccess != cudaStat ) {
+		std::cout << "Error\n";
+		fprintf(stderr,"GPUassert: %s\n", cudaGetErrorString(cudaStat));
+		std::cout << error_message << "\n";
 		exit (EXIT_FAILURE);
 	}
 }
 
+
+
+std::string cublasErrorString(cublasStatus_t error) {
+    switch (error)
+    {
+        case CUBLAS_STATUS_SUCCESS:
+            return "CUBLAS_STATUS_SUCCESS";
+
+        case CUBLAS_STATUS_NOT_INITIALIZED:
+            return "CUBLAS_STATUS_NOT_INITIALIZED";
+
+        case CUBLAS_STATUS_ALLOC_FAILED:
+            return "CUBLAS_STATUS_ALLOC_FAILED";
+
+        case CUBLAS_STATUS_INVALID_VALUE:
+            return "CUBLAS_STATUS_INVALID_VALUE";
+
+        case CUBLAS_STATUS_ARCH_MISMATCH:
+            return "CUBLAS_STATUS_ARCH_MISMATCH";
+
+        case CUBLAS_STATUS_MAPPING_ERROR:
+            return "CUBLAS_STATUS_MAPPING_ERROR";
+
+        case CUBLAS_STATUS_EXECUTION_FAILED:
+            return "CUBLAS_STATUS_EXECUTION_FAILED";
+
+        case CUBLAS_STATUS_INTERNAL_ERROR:
+            return "CUBLAS_STATUS_INTERNAL_ERROR";
+    }
+
+    return "<unknown>";
+}
+
+
+
+
 void CUBLAS_ERROR_WRAPPER(cublasStatus_t cudaStat,std::string error_message) {
 	if (cudaStat != cudaSuccess) {
+
+		std::string msg = cublasErrorString(cudaStat);
+
 		std::cout << error_message << std::endl;
+		std::cout << msg << "\n";
+
 		exit (EXIT_FAILURE);
 	}
 }
@@ -532,6 +639,30 @@ __device__ double atomicAddDouble(double* address, double val)
     return __longlong_as_double(old);
 }
 
+//atomic add for doubles,since undefined in cuda
+__device__ double atomicAdd(double* address, double val)
+{
+    unsigned long long int* address_as_ull =
+                                          (unsigned long long int*)address;
+    unsigned long long int old = *address_as_ull, assumed;
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed, 
+                        __double_as_longlong(val + 
+                        __longlong_as_double(assumed)));
+    } while (assumed != old);
+    return __longlong_as_double(old);
+}
+
+
+void curandGenerateUniform_wrapper(float *d_mask,int size,curandGenerator_t &generator) {
+	curandGenerateUniform(generator,d_mask,size);
+}
+
+void curandGenerateUniform_wrapper(double *d_mask,int size,curandGenerator_t &generator) {
+	curandGenerateUniformDouble(generator,d_mask,size);
+}
+
 
 __device__
 inline float cuda_exp_wrapper(float x) {
@@ -551,6 +682,200 @@ inline float cuda_log_wrapper(float x) {
 __device__
 inline double cuda_log_wrapper(double x) {
 	return log(x);
+}
+
+
+__device__
+inline float pow_wrapper(float x,float y) {
+	return powf(x,y);
+}
+
+__device__
+inline double pow_wrapper(double x,double y) {
+	return pow(x,y);
+}
+
+
+__device__
+inline double tanh_wrapper(double x) {
+	return tanh(x);
+}
+
+
+__device__
+inline float tanh_wrapper(float x) {
+	return tanhf(x);
+}
+
+
+__device__
+inline bool nan_wrapper(float x) {
+	return isnan((double)x);
+}
+
+__device__
+inline bool nan_wrapper(double x) {
+	return isnan(x);
+}
+
+__device__
+inline bool nan_wrapper(int x) {
+	return isnan((double)x);
+}
+
+__device__
+inline bool isinf_wrapper(double x) {
+	return isinf((float)x);
+}
+
+__device__
+inline bool isinf_wrapper(float x) {
+	return isinf(x);
+}
+
+__device__
+inline double cuda_log1p_wrapper(double x) {
+	return log1p(x);
+}
+
+__device__
+inline float cuda_log1p_wrapper(float x) {
+	return log1pf(x);
+}
+
+__device__
+inline double cuda_max_wrapper(double x,double y) {
+	return max(x,y);
+}
+
+__device__
+inline float cuda_max_wrapper(float x,float y) {
+	return fmaxf(x,y);
+}
+
+
+
+__device__
+inline double cuda_min_wrapper(double x,double y) {
+	return min(x,y);
+}
+
+__device__
+inline float cuda_min_wrapper(float x,float y) {
+	return fminf(x,y);
+}
+
+
+template<typename dType>
+void get_cell_states(dType *d_ptr,int LSTM_size,int minibatch_size) {
+	thrust::device_ptr<dType> debug_ptr = thrust::device_pointer_cast(d_ptr);
+	int num_above_10 = 0;
+	int num_below_10 = 0;
+	int num_above_50 = 0;
+	int num_below_50 = 0;
+	int num_above_100 = 0;
+	int num_below_100 = 0;
+	int num_above_500 = 0;
+	int num_below_500 = 0;
+
+	for(int i=0; i<minibatch_size; i++) {
+		for(int j=0; j< LSTM_size; j++) {
+			dType val = debug_ptr[IDX2C(j,i,LSTM_size)];
+
+
+			if(val>10) {
+				num_above_10++;
+			}
+			if(val>50) {
+				num_above_50++;
+			}
+			if(val>100) {
+				num_above_100++;
+			}
+			if(val>500) {
+				num_above_500++;
+			}
+			if(val<-10) {
+				num_below_10++;
+			}
+			if(val<-50) {
+				num_below_50++;
+			}
+			if(val<-100) {
+				num_below_100++;
+			}
+			if(val<-500) {
+				num_below_500++;
+			}
+		}
+	}
+
+	std::cout << "CELL STATS\n";
+	std::cout << "Total cell states: " << LSTM_size*minibatch_size << "\n";
+	std::cout << "Num above 10: " << num_above_10 << "\n";
+	std::cout << "Num above 50: " << num_above_50 << "\n";
+	std::cout << "Num above 100: " << num_above_100 << "\n";
+	std::cout << "Num above 500: " << num_above_500 << "\n";
+	std::cout << "Num below -10: " << num_below_10 << "\n";
+	std::cout << "Num below -50: " << num_below_50 << "\n";
+	std::cout << "Num below -100: " << num_below_100 << "\n";
+	std::cout << "Num below -500: " << num_below_500 << "\n";
+}
+
+
+void devSynchAll() {
+	int num_devices;
+	int origin_device;
+	cudaGetDevice(&origin_device);
+	cudaGetDeviceCount(&num_devices);
+	for(int i=0; i<num_devices; i++) {
+		cudaSetDevice(i);
+		cudaDeviceSynchronize();
+	}
+	cudaSetDevice(origin_device);
+}
+
+
+template<typename dType>
+__global__
+void nan_check_kernel(dType *d_ptr,int rows,int cols,bool *d_check) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<rows*cols; i+=gridDim.x*blockDim.x) {
+		if(nan_wrapper(d_ptr[i])) {
+			d_check[0] = true;
+		}
+	}
+}
+
+
+bool *d_temp_bool=NULL;
+
+template<typename dType>
+bool check_nan(dType *d_ptr,int rows,int cols) {
+
+	CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_temp_bool, 1*sizeof(bool)),"GPU memory allocation failed\n");
+	thrust::device_ptr<bool> debug_ptr = thrust::device_pointer_cast(d_temp_bool);
+	cudaMemset(d_temp_bool,0,1*sizeof(bool));
+
+	nan_check_kernel<<<256,256>>>(d_ptr,rows,cols,d_temp_bool);
+	devSynchAll();
+
+	if(debug_ptr[0]) {
+		std::cout << "NAN check failed\n";
+		return true;
+	}
+
+	cudaFree(d_temp_bool);
+	return false;
+}
+
+
+template<typename dType>
+__global__
+void zero_check(dType *d_mat, int size) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		assert(d_mat[i]==0);
+	}
 }
 
 

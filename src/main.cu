@@ -5,6 +5,9 @@
 #include <cmath>
 #include <chrono>
 #include <iomanip>
+#include <fstream>
+
+#include "math_constants.h"
 
 //Eigen includes
 #include <Eigen/Dense>
@@ -17,11 +20,19 @@
 
 //My own includes
 #include "global_params.h"
+#include "prev_states.h"
 #include "input_file_prep.h"
 #include "BZ_CUDA_UTIL.h"
+#include "attention_layer.h"
+#include "attention_node.h"
+#include "decoder_model_wrapper.h"
+#include "ensemble_factory.h"
 #include "base_layer.h"
+#include "NCE.h"
 #include "gpu_info_struct.h"
 #include "custom_kernels.h"
+#include "Hidden_To_Hidden_Layer.h"
+#include "LSTM_HH.h"
 #include "model.h"
 #include "fileHelper.h"
 #include "Eigen_Util.h"
@@ -32,6 +43,11 @@
 #include "Input_To_Hidden_Layer.hpp"
 #include "Hidden_To_Hidden_Layer.hpp"
 #include "LSTM_HH.hpp"
+#include "decoder_model_wrapper.hpp"
+#include "ensemble_factory.hpp"
+#include "attention_layer.hpp"
+#include "attention_node.hpp"
+#include "NCE.hpp"
 
 //parse the command line from the user
 void command_line_parse(global_params &params,int argc, char **argv) {
@@ -70,6 +86,9 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 	//for continuing to train
 	std::vector<std::string> cont_train;
 
+	//for multi gpu training
+	std::vector<int> gpu_indicies;
+
 	//basic format setup
 	namespace po = boost::program_options; 
 	po::options_description desc("Options");
@@ -81,6 +100,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   		("cont-train,C",po::value<std::vector<std::string>> (&cont_train)->multitoken(),"Resume training of a model (THIS WILL OVERWRITE THE MODEL FILE)\n"\
   			"FORMAT: (if sequence to sequence): <source file name> <target file name> <neural network file name>\n"\
   			"FORMAT: (if seq): <target file name> <neural network file name>")
+  		("train-ensemble",po::value<std::string> (&params.ensemble_train_file_name),"Train a model with the same integerization mappings as another model. This is needed to doing ensemble decoding\n"\
+  			"FORMAT: <neural network file name>")
+  		("num-layers,N",po::value<int>(&params.num_layers),"Set the number of LSTM layers you want for your model\n DEFAULT:1")
+  		("multi-gpu,M",po::value<std::vector<int>> (&gpu_indicies)->multitoken(), "Train the model on multiple gpus.\nFORMAT: <gpu for layer 1> <gpu for layer 2> ... <gpu for softmax>\n"\
+  			"DEFAULT: all layers and softmax lie on gpu 0")
   		("force-decode,f",po::value<std::vector<std::string> > (&test_files)->multitoken(), "Get per line probability of dataset plus the perplexity\n"\
   			"FORMAT: (if sequence to sequence): <source file name> <target file name> <trained neural network file name> <output file name>\n"\
   			"FORMAT: (if sequence): <target file name> <trained neural network file name> <output file name>")
@@ -89,22 +113,33 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   		("stoch-gen-len",po::value<int>(&params.sg_length) ,"How many sentences to let stoch-gen run for\n"\
   			"FORMAT: <num sentences>\n"
   			"DEFAULT: 100")
+  		("dump-alignments",po::value<bool>(&params.attent_params.dump_alignments),"Dump the alignments to a file")
   		("temperature",po::value<double>(&params.temperature) ,"What should the temperature be for the stoch generation"\
   			"FORMAT: <temperature>  where temperature is typically between [0,1]. A lower temperature makes the model output less and less from what it memorized from training\n"\
   			"DEFAULT: 1")
   		("sequence,s", "Train model that learns a sequence,such as language modeling. Default model is sequence to sequence model")
+  		("carve_sequence_data",po::value<int>(&params.backprop_len),"For sequence models, train the data as if the data was one long sequence. DEAFUL: <false>")
+  		("dropout,d",po::value<precision>(&params.dropout_rate),"Use dropout and set the dropout rate. This value is the probability of keeping a node.\nFORMAT: <dropout rate>\n DEFAULT: not used")
   		("learning-rate,l",po::value<precision>(&params.learning_rate),"Set the learning rate\n DEFAULT: 0.7")
+  		("random-seed",po::value<bool>(&params.random_seed),"Use a random seed instead of a faxed one\n")
   		("longest-sent,L",po::value<int>(&params.longest_sent),"Set the maximum sentence length for training.\n DEFAULT: 100")
   		("hiddenstate-size,H",po::value<int>(&params.LSTM_size),"Set hiddenstate size \n DEFAULT: 1000")
+  		("UNK-replacement",po::value<int>(&params.unk_aligned_width),"Set unk replacement to be true and set the wideth\n FORMAT: <alignment width>")
   		("truncated-softmax,T",po::value<std::vector<std::string>> (&trunc_info)->multitoken(),"Use truncated softmax\n DEFAULT: not being used\n"\
   			"FORMAT: <shortlist size> <sampled size>")
+  		("NCE",po::value<int>(&params.num_negative_samples),"Use an NCE loss function, specify the number of noise samples you want (these are shared across the minibatch for speed)")
+  		("attention-model",po::value<bool>(&params.attent_params.attention_model),"Bool for whether you want to train with the attention mode\n")
+  		("attention-width",po::value<int>(&params.attent_params.D),"How many words do you want to look at around the alignment position on one half, default 10\n")
+  		("feed_input",po::value<bool>(&params.attent_params.feed_input),"Bool for wether you want feed input for the attention model\n")
   		("source-vocab,v",po::value<int>(&params.source_vocab_size),"Set source vocab size\n DEFAULT: number of unique words in source training corpus")
   		("target-vocab,V",po::value<int>(&params.target_vocab_size),"Set target vocab size\n DEFAULT: number of unique words in target training corpus")
   		("shuffle",po::value<bool>(&params.shuffle),"true if you want to shuffle the train data\n DEFAULT: true")
   		("parameter-range,P",po::value<std::vector<precision> > (&lower_upper_range)->multitoken(),"parameter initialization range\n"\
   			"FORMAT: <Lower range value> <Upper range value>\n DEFAULT: -0.08 0.08")
   		("number-epochs,n",po::value<int>(&params.num_epochs),"Set number of epochs\n DEFAULT: 10")
-  		("clip-gradients,c",po::value<precision>(&params.norm_clip),"Set gradient clipping threshold\n DEFAULT: 5")
+  		("matrix-clip-gradients,c",po::value<precision>(&params.norm_clip),"Set gradient clipping threshold\n DEFAULT: 5")
+  		("ind-clip-gradients,i",po::value<precision>(&BZ_CUDA::ind_norm_clip_thres),"Set gradient clipping threshold for individual elements\n DEFAULT: 0.1")
+  		("whole-clip-gradients,w",po::value<precision>(&params.norm_clip),"Set gradient clipping threshold for all gradients\n DEFAULT: 5")
   		("adaptive-halve-lr,a",po::value<std::vector<std::string>> (&adaptive_learning_rate)->multitoken(),"change the learning rate"\
   			" when the perplexity on your specified dev set decreases from the previous half epoch by some constant, so "\
   			" new_learning_rate = constant*old_learning rate, by default the constant is 0.5, but can be set using adaptive-decrease-factor\n"
@@ -114,13 +149,15 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   			" it\n DEFAULT: 0.5")
   		("fixed-halve-lr",po::value<int> (&params.epoch_to_start_halving),"Halve the learning rate"\
   			" after a certain epoch, every half epoch afterwards by a specific amount")
+  		("fixed-halve-lr-full",po::value<int> (&params.epoch_to_start_halving_full),"Halve the learning rate"\
+  			" after a certain epoch, every epoch afterwards by a specific amount")
   		("minibatch-size,m",po::value<int>(&params.minibatch_size),"Set minibatch size\n DEFAULT: 128")
   		("screen-print-rate",po::value<int>(&params.screen_print_rate),"Set after how many minibatched you want to print training info to the screen\n DEFAULT: 5")
   		("HPC-output",po::value<std::string>(&params.HPC_output_file_name),"Use if you want to have the terminal output also be put to a" \
   			"file \n FORMAT: <file name>")
   		("best-model,B",po::value<std::string>(&params.best_model_file_name),"During train have the best model be written to a file\nFORMAT: <output file name>")
-  		("kbest,k",po::value<std::vector<std::string> > (&kbest_files)->multitoken(),"Get k best paths in sequence to sequence model\n"\
-  			"FORMAT: <how many paths> <source file name> <neural network file name> <output file name>") 
+  		("kbest,k",po::value<std::vector<std::string> > (&kbest_files)->multitoken(),"Get k best paths in sequence to sequence model. You can specify more than one model for ensemble decoding\n"\
+  			"FORMAT: <how many paths> <source file name> <neural network file name 1> <neural network file name 2> ... <output file name>")
   		("beam-size,b",po::value<int>(&params.beam_size),"Set beam size for kbest paths\n DEFAULT: 12")
   		("penalty,p",po::value<precision>(&params.penalty),"Set penalty for kbest decoding. The value entered"\
   			" will be added to the log probability score per target word decoded. This can make the model favor longer sentences for decoding\n DEFAULT: 0")
@@ -174,6 +211,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 		if(vm.count("train") || vm.count("cont-train")) {
 
+
 			//some basic error checks to parameters
 			if(params.learning_rate<=0) {
 				std::cout << "ERROR: you cannot have a learning rate <=0\n";
@@ -213,6 +251,43 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				params.HPC_output = true;
 			}
 
+			if(vm.count("dropout")) {
+				params.dropout = true;
+				if(params.dropout_rate < 0 || params.dropout_rate > 1) {
+					std::cout << "ERROR: dropout rate must be between 0 and 1\n";
+					exit (EXIT_FAILURE);
+				}
+			}
+
+
+			if(vm.count("matrix-clip-gradients")) {
+				BZ_CUDA::global_clip_flag = false;
+				params.clip_gradient = true;
+				BZ_CUDA::individual_grad_clip = false;
+			}
+
+			if(vm.count("whole-clip-gradients")) {
+				BZ_CUDA::global_clip_flag = true;
+				params.clip_gradient = false;
+				BZ_CUDA::individual_grad_clip = false;
+			}
+
+			if(vm.count("ind-clip-gradients")) {
+				BZ_CUDA::global_clip_flag = false;
+				params.clip_gradient = false;
+				BZ_CUDA::individual_grad_clip = true;
+			}
+
+			if(vm.count("NCE")) {
+				params.NCE = true;
+				params.softmax = false;
+				BZ_CUDA::print_partition_function = true;
+			}
+
+			if(vm.count("UNK-replacement")) {
+				params.unk_replace = true;
+			}
+
 
 			boost::filesystem::path unique_path = boost::filesystem::unique_path();
 			std::cout << "Temp directory being created named: " << unique_path.string() << "\n";
@@ -220,6 +295,13 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			params.unique_dir = unique_path.string();
 
 			params.train_file_name = params.unique_dir+"/train.txt";
+
+			//number of layers
+			//error checking is done when initializing model
+			if(vm.count("multi-gpu")) {
+				params.gpu_indicies = gpu_indicies;
+			}
+
 
 
 			if(vm.count("cont-train")) {
@@ -235,7 +317,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 						exit (EXIT_FAILURE);
 					}
 
-
+					params.attent_params.attention_model = false;
 					params.target_file_name = cont_train[0];
 					params.input_weight_file = cont_train[1];
 					params.output_weight_file = cont_train[1];
@@ -246,7 +328,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					input_file_prep input_helper;
 
 					input_helper.integerize_file_LM(params.input_weight_file,params.target_file_name,params.train_file_name,
-						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size);
+						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size,params.num_layers);
 
 				}
 				else {
@@ -277,10 +359,17 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 					input_helper.integerize_file_nonLM(params.input_weight_file,params.source_file_name,
 						params.target_file_name,params.train_file_name,params.longest_sent,params.minibatch_size,params.LSTM_size,
-						params.source_vocab_size,params.target_vocab_size);
+						params.source_vocab_size,params.target_vocab_size,params.num_layers);
 				}
 			}
 			else {
+
+				if(vm.count("num-layers")) {
+					if(params.num_layers <=0) {
+						std::cout << "ERROR: you must have >= 1 layer for your model\n";
+						exit (EXIT_FAILURE);
+					}
+				}
 
 				//now create the necessary files
 				if(vm.count("sequence")) {
@@ -293,17 +382,45 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 						exit (EXIT_FAILURE);
 					}
 
+					params.attent_params.attention_model = false;
 					params.LM = true;
 					params.target_file_name = train_files[0];
 					params.output_weight_file = train_files[1];
 
 					input_file_prep input_helper;
 
+					if(vm.count("train-ensemble")) {
+						params.ensemble_train = true;
+					}
+
+
 					//this outputs the train.txt file along with the mappings and first line
-					bool success = input_helper.prep_files_train_LM(params.minibatch_size,params.longest_sent,
-						params.target_file_name,
-						params.train_file_name,params.target_vocab_size,
-						params.shuffle,params.output_weight_file,params.LSTM_size);
+					bool success=true;
+					if(!params.ensemble_train) {
+
+						if(vm.count("carve_sequence_data")) {
+							params.carve_data = true;
+							input_helper.prep_files_train_LM_carve(params.minibatch_size,
+								params.target_file_name,
+								params.train_file_name,params.target_vocab_size,
+								params.output_weight_file,params.LSTM_size,params.num_layers,
+								params.backprop_len);
+						}
+						else {
+							success = input_helper.prep_files_train_LM(params.minibatch_size,params.longest_sent,
+								params.target_file_name,
+								params.train_file_name,params.target_vocab_size,
+								params.shuffle,params.output_weight_file,params.LSTM_size,params.num_layers);
+						}
+					}
+					else {
+						success = input_helper.prep_files_train_LM_ensemble(params.minibatch_size,params.longest_sent,
+							params.target_file_name,
+							params.train_file_name,params.target_vocab_size,
+							params.shuffle,params.output_weight_file,params.LSTM_size,params.num_layers,params.ensemble_train_file_name);
+					}
+
+
 
 					//clean up if error
 					if(!success) {
@@ -335,12 +452,27 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 						exit (EXIT_FAILURE);
 					}
 
+					//see if ensemble training
+					if(vm.count("train-ensemble")) {
+						params.ensemble_train = true;
+					}
+
 					input_file_prep input_helper;
 
-					bool success = input_helper.prep_files_train_nonLM(params.minibatch_size,params.longest_sent,
-						params.source_file_name,params.target_file_name,
-						params.train_file_name,params.source_vocab_size,params.target_vocab_size,
-						params.shuffle,params.output_weight_file,params.LSTM_size);
+					bool success=true;
+					if(!params.ensemble_train) {
+						success = input_helper.prep_files_train_nonLM(params.minibatch_size,params.longest_sent,
+							params.source_file_name,params.target_file_name,
+							params.train_file_name,params.source_vocab_size,params.target_vocab_size,
+							params.shuffle,params.output_weight_file,params.LSTM_size,params.num_layers,params.unk_replace,params.unk_aligned_width);
+					}
+					else {
+						success = input_helper.prep_files_train_nonLM_ensemble(params.minibatch_size,params.longest_sent,
+							params.source_file_name,params.target_file_name,
+							params.train_file_name,params.source_vocab_size,params.target_vocab_size,
+							params.shuffle,params.output_weight_file,params.LSTM_size,params.num_layers,params.ensemble_train_file_name);
+					}
+
 					//clean up if error
 					if(!success) {
 						boost::filesystem::path temp_path(params.unique_dir);
@@ -359,16 +491,18 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					exit (EXIT_FAILURE);
 				}
 
-				precision temp_lower = lower_upper_range[0];
-				precision temp_upper = lower_upper_range[1];
-				if(temp_lower >= temp_upper) {
+				BZ_CUDA::lower = lower_upper_range[0];
+				BZ_CUDA::upper = lower_upper_range[1];
+				if(BZ_CUDA::lower >= BZ_CUDA::upper) {
 					std::cout << "ERROR: the lower parameter range cannot be greater than the upper range\n";
 					boost::filesystem::path temp_path(params.unique_dir);
 					boost::filesystem::remove_all(temp_path);
 					exit (EXIT_FAILURE);
 				}
-				params.lower_range = temp_lower;
-				params.upper_range = temp_upper;
+			}
+
+			if(vm.count("fixed-halve-lr-full")) {
+				params.stanford_learning_rate = true;
 			}
 				
 			if(vm.count("fixed-halve-lr")) {
@@ -396,7 +530,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					input_file_prep input_helper;
 
 					input_helper.integerize_file_LM(params.output_weight_file,params.dev_target_file_name,params.test_file_name,
-						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size); 
+						params.longest_sent,params.minibatch_size,true,params.LSTM_size,params.target_vocab_size,params.num_layers); 
 
 				}
 				else {
@@ -421,7 +555,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 					input_helper.integerize_file_nonLM(params.output_weight_file,params.dev_source_file_name,
 						params.dev_target_file_name,params.test_file_name,
-						params.longest_sent,params.minibatch_size,params.LSTM_size,params.source_vocab_size,params.target_vocab_size);
+						params.longest_sent,params.minibatch_size,params.LSTM_size,params.source_vocab_size,params.target_vocab_size,params.num_layers);
 				}
 
 				if(vm.count("best-model")) {
@@ -449,11 +583,12 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 		}
 
 		if(vm.count("kbest")) {
-			if (kbest_files.size()!=4) {
-				std::cout << "ERROR: 4 arguements must be entered for kbest, 1. number of best paths"\
-				" 2 input file name "
-				" 3. neural network file name (this is the output file you get after training the neural network)"\
-				" 4. output file name\n";
+			if (kbest_files.size()<4) {
+				std::cout << "ERROR: at least 4 arguements must be entered for kbest, 1. number of best paths\n"\
+				" 2 input file name \n"
+				" 3. neural network file name (this is the output file you get after training the neural network)\n"\
+				" 4. output file name\n"\
+				"Additionally more neural network file names can be added to do ensemble decoding\n";
 				exit (EXIT_FAILURE);
 			}
 
@@ -462,13 +597,20 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			boost::filesystem::create_directories(unique_path);
 			params.unique_dir = unique_path.string();
 
+			//for ensembles
+			std::vector<std::string> model_names;
+			for(int i=2; i<kbest_files.size()-1; i++) {
+				model_names.push_back(kbest_files[i]);
+			}
+			params.model_names = model_names;
+
 			params.decode_file_name = params.unique_dir+"/decoder_input.txt";
 			params.decoder_output_file = params.unique_dir+"/decoder_output.txt";
 
 			params.num_hypotheses =std::stoi(kbest_files[0]);
 			params.decode_tmp_file = kbest_files[1];
-			params.input_weight_file = kbest_files[2];
-			params.decoder_final_file = kbest_files[3];
+			params.input_weight_file = model_names[0];
+			params.decoder_final_file = kbest_files.back();
 
 			input_file_prep input_helper;
 
@@ -476,7 +618,22 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			// 	params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,true,params.source_vocab_size);
 
 			input_helper.integerize_file_kbest(params.input_weight_file,params.decode_tmp_file,params.decode_file_name,
-				params.longest_sent,params.LSTM_size,params.target_vocab_size,params.source_vocab_size);
+				params.longest_sent,params.LSTM_size,params.target_vocab_size,params.source_vocab_size,params.num_layers);
+
+			if(vm.count("multi-gpu")) {
+				if(gpu_indicies.size()!=model_names.size()) {
+					std::cout << "ERROR: for decoding, each model must be specified a gpu\n";
+					boost::filesystem::path temp_path(params.unique_dir);
+					boost::filesystem::remove_all(temp_path);
+					exit (EXIT_FAILURE);
+				}
+				params.gpu_indicies = gpu_indicies;
+			}
+			else {
+				for(int i=0; i<model_names.size(); i++) {
+					params.gpu_indicies.push_back(0);
+				}
+			}
 
 			if(params.beam_size<=0) {
 				std::cout << "ERROR: beam size cannot be <=0\n";
@@ -539,6 +696,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 					exit (EXIT_FAILURE);
 				}
 
+				params.attent_params.attention_model = false;
 				params.target_file_name = test_files[0];
 				params.input_weight_file = test_files[1];
 				params.output_force_decode = test_files[2];
@@ -547,7 +705,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				input_file_prep input_helper;
 
 				input_helper.integerize_file_LM(params.input_weight_file,params.target_file_name,params.test_file_name,
-					params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size);
+					params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,params.num_layers);
 
 			}
 			else {
@@ -565,6 +723,9 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 				params.input_weight_file = test_files[2];
 				params.output_force_decode = test_files[3];
 
+				//stuff for attention model alignments
+				params.attent_params.tmp_alignment_file = params.unique_dir + "/alignments.txt";
+
 				if(params.source_file_name == params.target_file_name) {
 					std::cout << "ERROR: do not use the same file for source and target data\n";
 					boost::filesystem::path temp_path(params.unique_dir);
@@ -576,7 +737,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 				input_helper.integerize_file_nonLM(params.input_weight_file,params.source_file_name,
 					params.target_file_name,params.test_file_name,params.longest_sent,1,params.LSTM_size,
-					params.source_vocab_size,params.target_vocab_size);
+					params.source_vocab_size,params.target_vocab_size,params.num_layers);
 			}
 			params.train= false;
 			params.decode=false;
@@ -623,7 +784,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			params.LSTM_size = std::stoi(info[1]);
 			params.target_vocab_size = std::stoi(info[2]);
 
-
 			params.LM = true;
 			params.train= false;
 			params.decode = false;
@@ -661,28 +821,28 @@ int main(int argc, char **argv) {
 	// }
 
 
-
 	//file_helper file_info(params.train_file_name,params.minibatch_size,params.train_num_lines_in_file); //Initialize the file information
 
 	//get the command line arguements
 	command_line_parse(params,argc,argv);
 
+
+	//randomize the seed
+	if(params.random_seed) {
+		BZ_CUDA::gen.seed(static_cast<unsigned int>(std::time(0)));
+	}
+
 	neuralMT_model<precision> model; //This is the model
 	params.printIntroMessage();
-	BZ_CUDA::lower = params.lower_range;
-	BZ_CUDA::upper = params.upper_range;
 
-	if(params.google_learning_rate && params.learning_rate_schedule) {
-		std::cout << "ERROR: do not select both the fixed learning rate schedule and the perplexity based scheduler";
-		std::cout << "I Guarantee this is not what you intended to do\n";
-		exit (EXIT_FAILURE);
-	}
+
 
 	if(!params.decode) {
 		model.initModel(params.LSTM_size,params.minibatch_size,params.source_vocab_size,params.target_vocab_size,
 			params.longest_sent,params.debug,params.learning_rate,params.clip_gradient,params.norm_clip,
 			params.input_weight_file,params.output_weight_file,params.softmax_scaled,params.train_perplexity,params.truncated_softmax,
-			params.shortlist_size,params.sampled_size,params.LM);
+			params.shortlist_size,params.sampled_size,params.LM,params.num_layers,params.gpu_indicies,params.dropout,
+ 			params.dropout_rate,params.attent_params,params);
 	}
 
 	if(params.load_model_train) {
@@ -745,7 +905,7 @@ int main(int argc, char **argv) {
 			begin_minibatch = std::chrono::system_clock::now();
 
 			//cudaProfilerStart();
-
+			model.initFileInfo(&file_info);
 			model.compute_gradients(file_info.minibatch_tokens_source_input,file_info.minibatch_tokens_source_output,
 				file_info.minibatch_tokens_target_input,file_info.minibatch_tokens_target_output,
 				file_info.h_input_vocab_indicies_source,file_info.h_output_vocab_indicies_source,
@@ -753,9 +913,10 @@ int main(int argc, char **argv) {
 				file_info.current_source_length,file_info.current_target_length,
 				file_info.h_input_vocab_indicies_source_Wgrad,file_info.h_input_vocab_indicies_target_Wgrad,
 				file_info.len_source_Wgrad,file_info.len_target_Wgrad,file_info.h_sampled_indices,
-				file_info.len_unique_words_trunc_softmax);
+				file_info.len_unique_words_trunc_softmax,file_info.h_batch_info);
 
-			// cudaProfilerStop();
+			//cudaProfilerStop();
+			//return;
 			// return 0;
 
 			end_minibatch = std::chrono::system_clock::now();
@@ -765,11 +926,13 @@ int main(int argc, char **argv) {
 			total_words_batch_SPEED+=file_info.words_in_minibatch;
 
 			if(curr_batch_num_SPEED>=thres_batch_num_SPEED) {
+				std::cout << "Recent batch gradient L2 norm size: " << BZ_CUDA::global_norm << "\n";
 				std::cout << "Batched Minibatch time: " << total_batch_time_SPEED/60.0 << " minutes\n";
 				std::cout << "Batched Words in minibatch: " << total_words_batch_SPEED << "\n";
 				std::cout << "Batched Throughput: " << (total_words_batch_SPEED)/(total_batch_time_SPEED) << " words per second\n";
 				std::cout << total_words << " out of " << params.train_total_words << " epoch: " << current_epoch <<  "\n\n";
 				if(params.HPC_output) {
+					HPC_output << "Recent batch gradient L2 norm size: " << BZ_CUDA::global_norm << "\n";
 					HPC_output << "Batched Minibatch time: " << total_batch_time_SPEED/60.0 << " minutes\n";
 					HPC_output << "Batched Words in minibatch: " << total_words_batch_SPEED << "\n";
 					HPC_output << "Batched Throughput: " << (total_words_batch_SPEED)/(total_batch_time_SPEED) << " words per second\n";
@@ -846,8 +1009,20 @@ int main(int argc, char **argv) {
 					}
 				}
 
+				//stuff for stanford learning rate schedule
+				if(params.stanford_learning_rate && current_epoch>=params.epoch_to_start_halving_full) {
+					temp_learning_rate = temp_learning_rate/2;
+					std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
+					model.update_learning_rate(temp_learning_rate);
+					learning_rate_flag = true;
+					if(params.HPC_output) {
+						HPC_output << "New learning rate:" << temp_learning_rate <<"\n\n";
+						HPC_output.flush();
+					}
+				}
+
 				double new_perplexity;
-				if(params.google_learning_rate || params.learning_rate_schedule) {
+				if(params.learning_rate_schedule) {
 					new_perplexity = model.get_perplexity(params.test_file_name,params.minibatch_size,params.test_num_lines_in_file,params.longest_sent,
 						params.source_vocab_size,params.target_vocab_size,HPC_output,false,params.test_total_words,params.HPC_output,false,"");
 				}
@@ -861,13 +1036,13 @@ int main(int argc, char **argv) {
 						HPC_output.flush();
 					}
 					if ( (new_perplexity + params.margin >= old_perplexity) && current_epoch!=1) {
+						temp_learning_rate = temp_learning_rate*params.decrease_factor;
+						model.update_learning_rate(temp_learning_rate);
+						std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
 						if(params.HPC_output) {
 							HPC_output << "New learning rate:" << temp_learning_rate <<"\n\n";
 							HPC_output.flush();
 						}
-						temp_learning_rate = temp_learning_rate*params.decrease_factor;
-						model.update_learning_rate(temp_learning_rate);
-						std::cout << "New learning rate:" << temp_learning_rate <<"\n\n";
 					}
 					
 
@@ -888,6 +1063,7 @@ int main(int argc, char **argv) {
 				}
 
 				if(params.train_perplexity) {
+					model.train_perplexity = model.train_perplexity/std::log(2.0);
 					std::cout << "PData on train set:"  << model.train_perplexity << "\n";
 					std::cout << "Total target words: " << file_info.total_target_words << "\n";
 					std::cout << "Training set perplexity: " << std::pow(2,-1*model.train_perplexity/file_info.total_target_words) << "\n";
@@ -911,10 +1087,10 @@ int main(int argc, char **argv) {
 					}
 				}
 			}
-			cudaDeviceSynchronize();
+			devSynchAll();
 		}	
 		//Now that training is done, dump the weights
-		cudaDeviceSynchronize();
+		devSynchAll();
 		model.dump_weights();
 	}
 
@@ -923,6 +1099,12 @@ int main(int argc, char **argv) {
 	if(params.test) {
 		model.get_perplexity(params.test_file_name,params.minibatch_size,params.test_num_lines_in_file,params.longest_sent,
 			params.source_vocab_size,params.target_vocab_size,HPC_output,true,params.test_total_words,params.HPC_output,true,params.output_force_decode);
+		//now unint alignments
+		if(model.attent_params.dump_alignments) {
+			input_file_prep input_helper;
+			model.output_alignments.close();
+			input_helper.unint_alignments(params.input_weight_file,params.attent_params.tmp_alignment_file,params.attent_params.alignment_file);
+		}
 	}
 
 	if(params.LM && params.stochastic_generation) {
@@ -934,13 +1116,17 @@ int main(int argc, char **argv) {
 
 	///////////////////////////////////////////decode the model////////////////////////////////////////////
 	if(params.decode) {
-		std::cout << "-----------------Starting Decoding----------------\n";
+		//std::cout << "-----------------Starting Decoding----------------\n";
 		begin_decoding = std::chrono::system_clock::now();
-		model.beam_decoder(params.beam_size,params.decode_file_name,
-			params.input_weight_file,params.decode_num_lines_in_file,params.source_vocab_size,
-			params.target_vocab_size,params.longest_sent,params.LSTM_size,params.penalty,
-			params.decoder_output_file,params.min_decoding_ratio,params.max_decoding_ratio,params.softmax_scaled,
-			params.num_hypotheses,params.print_score,params.dump_LSTM,params.LSTM_dump_file);
+		ensemble_factory<precision> ensemble_decode(params.model_names,params.num_hypotheses,params.beam_size, params.min_decoding_ratio,
+			params.penalty, params.longest_sent,params.decode_num_lines_in_file,params.print_score,
+			params.decoder_output_file,params.decode_file_name,
+			params.gpu_indicies,params.max_decoding_ratio,params.target_vocab_size,
+			params.dump_LSTM,params.LSTM_dump_file,params);
+
+		std::cout << "-----------------Starting Decoding----------------\n";
+		ensemble_decode.decode_file();
+
 		end_decoding = std::chrono::system_clock::now();
 		std::chrono::duration<double> elapsed_seconds = end_decoding-begin_decoding;
 		std::cout << "Decoding time: " << elapsed_seconds.count()/60.0 << " minutes\n";
@@ -955,7 +1141,7 @@ int main(int argc, char **argv) {
 	//remove the temp directory created
 	if(params.unique_dir!="NULL") {
 		boost::filesystem::path temp_path(params.unique_dir);
-		boost::filesystem::remove_all(temp_path);
+		//boost::filesystem::remove_all(temp_path);
 	}
 
 	//Compute the final runtime

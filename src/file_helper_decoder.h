@@ -32,6 +32,7 @@ struct file_helper_decoder {
 
 	int *h_input_vocab_indicies_source; //This is the pointer to memory on the CPU
 
+	file_helper_decoder() { }
 
 	//Constructor
 	file_helper_decoder(std::string file_name,int &num_lines_in_file,int max_sent_len) {
