@@ -1,5 +1,5 @@
 # Zoph_RNN
-This is Barret Zoph's neural network machine translation and language modeling toolkit.
+This is <a href="http://barretzoph.github.io/">Barret Zoph's</a> neural network machine translation and language modeling toolkit.
 
 -This code allows for multi-GPU parallelization of LSTM machine translation and language models. 
 
