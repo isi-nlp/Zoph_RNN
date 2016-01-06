@@ -7,3 +7,5 @@ This is Barret Zoph's neural network machine translation and language modeling t
 
 
 -For usage and instructions checkout the tutorial.pdf
+
+-The code for the paper: "Multi-Source Neural Translation" by Zoph et al. (Link: http://arxiv.org/abs/1601.00710) will be put up by the end of January/early February
