@@ -8,4 +8,4 @@ This is <a href="http://barretzoph.github.io/">Barret Zoph's</a> neural network 
 
 -For usage and instructions checkout the tutorial.pdf
 
--The code for the paper: "Multi-Source Neural Translation" by Zoph et al. (Link: http://arxiv.org/abs/1601.00710) will be put up by the end of January/early February
+-The code for the paper: "Multi-Source Neural Translation" by Zoph et al. (Link: http://arxiv.org/abs/1601.00710) is not currently available
