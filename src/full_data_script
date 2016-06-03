@@ -1,7 +1,0 @@
-
-python sort_file.py
-awk 'NF < 96' validation_english.txt > validation_english.txt.cutoff
-awk 'NF < 96' validation_french.txt > validation_french.txt.cutoff
-python integerize.py
-python pad.py output.txt
-python pad.py output_validation.txt

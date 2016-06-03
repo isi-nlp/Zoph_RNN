@@ -13,9 +13,17 @@ struct NCE_Node {
 	dType *d_dropout_mask;
 	int index;
 
-	NCE_Node(int LSTM_size,int minibatch_size,int num_negative_samples,int index,bool dropout) {
-		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_temp_embeddings, (num_negative_samples + minibatch_size)*LSTM_size*sizeof(dType)),"GPU memory allocation failed\n");
-		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_p_true, (num_negative_samples + minibatch_size)*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
+	NCE_Node(int LSTM_size,int minibatch_size,int num_negative_samples,int index,bool dropout,bool share_samples) {
+
+		if(share_samples) {
+			CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_temp_embeddings, (num_negative_samples + minibatch_size)*LSTM_size*sizeof(dType)),"GPU memory allocation failed\n");
+			CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_p_true, (num_negative_samples + minibatch_size)*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
+		}
+		else {
+			//CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_temp_embeddings, ((num_negative_samples+1)*minibatch_size)*LSTM_size*sizeof(dType)),"GPU memory allocation failed\n");
+			CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_p_true, (num_negative_samples+1)*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
+		}
+
 		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t, LSTM_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
 		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_d_ERRt_ht, LSTM_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
 		this->index = index;

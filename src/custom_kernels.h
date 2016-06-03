@@ -77,6 +77,18 @@ void forward_sigmoid_kernel(double *d_final,double *temp1,double *temp2,double *
 
 template<typename dType>
 __global__
+void forward_sigmoid_kernel_small(dType *d_final,dType *temp1,dType *d_bias,int hiddenstate_size) {
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		double temp_val = temp1[index] + d_bias[idx];
+		d_final[index] = 1.0/(1.0 + exp(-1.0*temp_val));
+	}
+}
+
+
+template<typename dType>
+__global__
 void forward_sigmoid_kernel_feed(dType *d_final,dType *temp1,dType *temp2,dType *temp3,dType *d_bias,int hiddenstate_size) {
 	int idx = threadIdx.x + blockIdx.y*blockDim.x;
 	if(idx < hiddenstate_size) {
@@ -131,6 +143,16 @@ void forward_c_t_kernel(dType *d_c_t,dType *d_f_t, dType *d_c_t_prev,dType *d_i_
 	if(idx < hiddenstate_size) {
 		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
 		d_c_t[index] = d_f_t[index] * d_c_t_prev[index] + d_i_t[index] * d_c_prime_t_tanh[index];
+	}
+}
+
+template<typename dType>
+__global__
+void forward_c_t_kernel_tree(dType *d_c_t,dType *d_f_t_1,dType *d_c_t_prev_1,dType *d_f_t_2,dType *d_c_t_prev_2,dType *d_i_t,dType *d_c_prime_t_tanh,int hiddenstate_size) {
+	int idx = threadIdx.x + blockIdx.y*blockDim.x;
+	if(idx < hiddenstate_size) {
+		int index = IDX2C(idx,blockIdx.x,hiddenstate_size);
+		d_c_t[index] = d_f_t_1[index] * d_c_t_prev_1[index] + d_f_t_2[index] * d_c_t_prev_2[index] + d_i_t[index] * d_c_prime_t_tanh[index];
 	}
 }
 
@@ -293,6 +315,16 @@ void elementwise_mult_kernel(dType *d_mat1,dType *d_mat2,dType *d_final,int hidd
 	}
 }
 
+template<typename dType>
+__global__ 
+void elementwise_mult_kernel_add(dType *d_mat1,dType *d_mat2,dType *d_final,int hiddenstate_size) 
+{
+	int idx = threadIdx.x+blockIdx.y*blockDim.x;
+  if(idx < hiddenstate_size) {
+		d_final[IDX2C(idx,blockIdx.x,hiddenstate_size)] += d_mat1[IDX2C(idx,blockIdx.x,hiddenstate_size)] * d_mat2[IDX2C(idx,blockIdx.x,hiddenstate_size)];
+	}
+}
+
 
 // template<typename dType>
 // __global__ 
@@ -372,8 +404,43 @@ void W_gradient_kernel_dropout(double *d_W_grad,int *d_vocab_indices,double *tem
 }
 
 
+template<typename dType> 
+__global__
+void W_small_gradient_kernel(dType *d_small_W_grad,int *d_reverse_unique_indicies,dType *temp1,dType *temp2,dType *temp3,
+	dType *temp4,int *d_vocab_indicies,int LSTM_size,int minibatch_size) 
+{	
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < minibatch_size; k+=gridDim.x) {
+		int vocab_index = d_vocab_indicies[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			dType sum = temp1[IDX2C(i,k,LSTM_size)] + temp2[IDX2C(i,k,LSTM_size)] + temp3[IDX2C(i,k,LSTM_size)] + temp4[IDX2C(i,k,LSTM_size)];
+			atomicAdd(&(d_small_W_grad[IDX2C(i,d_reverse_unique_indicies[vocab_index],LSTM_size)]),sum);
+		}
+	}
+}
 
 
+template<typename dType>
+__global__
+void W_small_dropout_gradient_kernel(dType *d_small_W_grad,int *d_reverse_unique_indicies,dType *temp1,dType *temp2,dType *temp3,
+	dType *temp4,int *d_vocab_indicies,int LSTM_size,int minibatch_size,dType *d_dropout_mask,dType rate) 
+{	
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < minibatch_size; k+=gridDim.x) {
+		int vocab_index = d_vocab_indicies[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			dType sum = temp1[IDX2C(i,k,LSTM_size)] + temp2[IDX2C(i,k,LSTM_size)] + temp3[IDX2C(i,k,LSTM_size)] + temp4[IDX2C(i,k,LSTM_size)];
+			sum = sum*(rate > d_dropout_mask[IDX2C(i,k,LSTM_size)])*(1/rate);
+			atomicAdd(&(d_small_W_grad[IDX2C(i,d_reverse_unique_indicies[vocab_index],LSTM_size)]),sum);
+		}
+	}
+}
 
 
 
@@ -593,6 +660,124 @@ void outputdist_perplexity_kernel(dType2 *output, dType *input, int dim,bool pri
 }
 
 
+template<typename dType,typename dType2>
+__global__
+void outputdist_perplexity_kernel_NCE(dType2 *output, dType *input, int dim,bool print_partition_function,double *d_partition_vals) {
+	__shared__ double buffer[SOFTMAX_THREADS]; //shared memory for the block, this must be the number of threads per block in size
+	int k = blockIdx.x; //get the block index
+	dType *input_k = input + k*dim; //all threads in block start from same index
+	dType2 *output_k = output + k*dim; //again all threads in block start from same index
+
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = dim; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+
+	//get the max element for each thread's assigned locations and put them in the buffer
+	//dim elements are covered in this reduction
+	buffer[threadIdx.x] = -DBL_MAX;
+	for(int i=i_start; i<i_end; i+=i_step) {
+		double z = input_k[i];
+		if(buffer[threadIdx.x] < z) {
+			buffer[threadIdx.x] = z;
+		}
+	}
+
+	 __syncthreads();
+
+	 // reduce
+	 //first thread goes through and finds the max element in the buffer
+	 //after this stage the max element for dim items is found
+	for(int stride=SOFTMAX_THREADS/2; stride>32; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] = (buffer[tid] > buffer[stride + tid]) ? buffer[tid] : buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+	if(tid<32) {
+		warpReduceMax(buffer,tid);
+	}
+
+	__syncthreads();
+
+	// sum
+	//Now go through all the dim elements and subtract the max from the element, keep a running sum for the normalization constant
+	//double max_k = buffer[0];
+	__syncthreads();
+	buffer[threadIdx.x] = 0;
+	for (int i=i_start; i<i_end; i+=i_step) {
+		//dType z = exp(input_k[i]-max_k); //subtract the max from the input, then exp it for the softmax
+		double z = cuda_exp_wrapper(input_k[i]);
+		buffer[threadIdx.x] += z; //keep a running sum of these values for the normalization constant
+		output_k[i] = z; //set the output as this value, then get ready to divide by the sum again
+	}
+
+ 	__syncthreads();
+
+ 	// reduce
+ 	//Now sum all the elements in the buffer, for the normalization constant
+ 	for(int stride=SOFTMAX_THREADS/2; stride>32; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+	if(tid<32) {
+		warpReduceSum(buffer,tid);
+	}
+
+  	__syncthreads();
+
+  	// normalize the softmax
+	double sum_k = buffer[0];
+	for (int i=i_start; i<i_end; i+=i_step) {
+		output_k[i] = cuda_log_wrapper(output_k[i]) - cuda_log_wrapper(sum_k);
+	}
+
+	if(print_partition_function && threadIdx.x == 0) {
+		d_partition_vals[blockIdx.x] = sum_k;
+	}
+}
+
+
+//for re-scoring
+template<typename dType>
+__global__
+void nce_score_dot(double *d_outputdist_perp,dType *d_h_t,dType *d_D,dType *d_b_d,int *d_vocab_indicies,int LSTM_size,int minibatch_size,int output_vocab_size) {
+
+	__shared__ double buffer[SOFTMAX_THREADS];
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	int tid = threadIdx.x;
+
+	for(int k = blockIdx.x; k < minibatch_size; k+=gridDim.x) {
+
+		int vocab_index = d_vocab_indicies[k];
+		buffer[tid] = 0;
+
+		__syncthreads();
+
+		for(int i= i_start; i < i_end; i += i_step) {
+			buffer[tid] += d_D[IDX2C(vocab_index,i,output_vocab_size)] * d_h_t[IDX2C(i,k,LSTM_size)];
+		}
+
+		__syncthreads();
+
+		for(int stride=SOFTMAX_THREADS/2; stride>0; stride>>=1) {
+			if(tid < stride) {
+				buffer[tid] += buffer[stride + tid];
+			}
+			__syncthreads();
+		}
+
+		if(threadIdx.x==0) {
+			d_outputdist_perp[IDX2C(vocab_index,k,output_vocab_size)] = buffer[0] + d_b_d[vocab_index];
+		}
+	}
+}
 
 
 
@@ -828,6 +1013,40 @@ void basic_compute_norm_p2(dType *temp_result,dType *final_result) {
 
 
 
+
+template<typename dType>
+__global__
+void print_norm_function_softmax(dType *d_mat,int size,int index,dType *d_error) {
+	__shared__ dType buffer[NORM_THREADS];
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	int tid = threadIdx.x;
+
+	buffer[tid] = 0;
+	for(int i= i_start; i<i_end; i+=i_step) {
+		buffer[tid]+=(d_mat[i]*d_mat[i]);
+	}
+	__syncthreads();
+
+	for(int stride=NORM_THREADS/2; stride>32; stride>>=1) {
+		if(tid < stride) {
+			buffer[tid] += buffer[stride + tid];
+		}
+		__syncthreads();
+	}
+
+	if(tid<32) {
+		warpReduceSum(buffer,tid);
+	}
+	__syncthreads();
+
+	if(tid==0) {
+		d_error[index] = buffer[0];
+	}
+}
+
+
 //clip the norm if it is greater than the threshold
 template<typename dType>
 void norm_clip_GPU(thrust::device_ptr<dType> &thrust_d_gradient,dType norm_threshold,int size) {
@@ -848,6 +1067,7 @@ void norm_clip_GPU_v2(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_grad
 	basic_compute_norm_p1<<<NORM_THREADS,NORM_THREADS>>>(d_gradient,size,d_temp_result);
 	basic_compute_norm_p2<<<1,NORM_THREADS>>>(d_temp_result,d_result);
 	cudaMemcpy(&norm,d_result,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	BZ_CUDA::recent_sum = norm;
 	norm = std::sqrt(norm);
 	if(norm > norm_threshold) {
 		//std::cout << "ACTUALLY NORM CLIPPING REGULAR PARAM\n";
@@ -855,6 +1075,8 @@ void norm_clip_GPU_v2(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_grad
 		thrust::for_each(thrust_d_gradient,thrust_d_gradient+size,unary_op);
 	}
 }
+
+
 
 //for global clipping
 template<typename dType>
@@ -866,6 +1088,25 @@ void norm_clip_GPU_v2_p1(thrust::device_ptr<dType> &thrust_d_gradient,dType *d_g
 	cudaMemcpy(&norm,d_result,1*sizeof(dType),cudaMemcpyDeviceToHost);
 	//norm = std::sqrt(norm);
 	BZ_CUDA::global_norm += norm;
+	BZ_CUDA::recent_sum = norm;
+	// if(norm > norm_threshold) {
+	// 	//std::cout << "ACTUALLY NORM CLIPPING REGULAR PARAM\n";
+	// 	re_scale_norm_functor<dType> unary_op(norm_threshold,norm);
+	// 	thrust::for_each(thrust_d_gradient,thrust_d_gradient+size,unary_op);
+	// }
+}
+
+
+//for global clipping
+template<typename dType>
+void norm_clip_GPU_v2_p1_DEBUG(dType *d_gradient,int size,dType *d_temp_result,dType *d_result) {
+	dType norm;
+	basic_compute_norm_p1<<<NORM_THREADS,NORM_THREADS>>>(d_gradient,size,d_temp_result);
+	basic_compute_norm_p2<<<1,NORM_THREADS>>>(d_temp_result,d_result);
+	devSynchAll();
+	cudaMemcpy(&norm,d_result,1*sizeof(dType),cudaMemcpyDeviceToHost);
+	//norm = std::sqrt(norm);
+	BZ_CUDA::recent_sum = norm;
 	// if(norm > norm_threshold) {
 	// 	//std::cout << "ACTUALLY NORM CLIPPING REGULAR PARAM\n";
 	// 	re_scale_norm_functor<dType> unary_op(norm_threshold,norm);
@@ -1357,6 +1598,7 @@ __global__
 void alignment_pos_kernel(dType *d_in,dType *d_out,int total_length,int *d_batch_info) {
 	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<total_length; i+=gridDim.x*blockDim.x) {
 		d_out[i] =  d_batch_info[i]*d_in[i];
+		//printf("d_batch_info from kernel %d %f\n",d_batch_info[i],d_out[i]);
 	}
 }
 
@@ -1371,6 +1613,26 @@ void lower_upper_kernel(dType *d_p_t,int *d_lower_upper,int D,int *d_batch_info,
 }
 
 
+
+/*
+	For getting viterbi alignments
+*/
+
+template<typename dType>
+__global__
+void get_viterbi_alignment_kernel(dType *d_alignments,int *d_indicies,int D,int minibatch_size,int *d_final_results) {
+
+	int minibatch_index = threadIdx.x;
+	dType max_val = -1;
+	int max_index = -1;
+	for(int i=0; i<2*D+1; i++) {
+		if(max_val < d_alignments[IDX2C(minibatch_index,i,minibatch_size)]) {
+			max_val = d_alignments[IDX2C(minibatch_index,i,minibatch_size)];
+			max_index = d_indicies[IDX2C(minibatch_index,i,minibatch_size)];
+		}
+	}
+	d_final_results[minibatch_index] = max_index;
+}
 
 
 /*
@@ -1435,9 +1697,11 @@ void load_in_hs_kernel(dType **d_total_hs_mat, int D,dType *d_hs_mat,int *d_indi
 	for(int i=blockIdx.x; i < (2*D+1)*minibatch_size; i+=gridDim.x) {
 		int minibatch_index = i % minibatch_size;
 		int source_index = d_indices[i];
+		//printf("index: %d   new-index: %d   offset: %d     length of sentence:  %d\n",source_index,d_batch_info[minibatch_index] - 1 - source_index,d_batch_info[minibatch_size+minibatch_index],d_batch_info[minibatch_index]);
 		if(source_index!=-1) {
 			for(int j=threadIdx.x; j < LSTM_size ;j+=blockDim.x) {
-				d_hs_mat[IDX2C(j,i,LSTM_size)] = d_total_hs_mat[source_index+d_batch_info[minibatch_size+minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)];
+				//d_hs_mat[IDX2C(j,i,LSTM_size)] = d_total_hs_mat[source_index+d_batch_info[minibatch_size+minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)]; WWW				
+				d_hs_mat[IDX2C(j,i,LSTM_size)] = d_total_hs_mat[d_batch_info[minibatch_index] - 1 - source_index + d_batch_info[minibatch_size+minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)];
 			}
 		}
 		else {
@@ -1449,12 +1713,23 @@ void load_in_hs_kernel(dType **d_total_hs_mat, int D,dType *d_hs_mat,int *d_indi
 }
 
 
+// template<typename dType>
+// __global__
+// void hs_DEBUG(dType **d_total_hs_mat,int minibatch_size,int LSTM_size,int longest_sent) {
+// 	for(int i=blockIdx.x; i < longest_sent; i+=gridDim.x) {
+// 		for(int j=threadIdx.x; j < LSTM_size*minibatch_size ;j+=blockDim.x) {
+// 			d_total_hs_mat[i][j]+=1;
+// 		}
+// 	}
+// }
+
+
 template<typename dType>
 __global__
 void exp_mask_kernel(int *d_indicies,dType *d_alignments,int minibatch_size,int D) {
 
 	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<minibatch_size*(2*D+1); i+=gridDim.x*blockDim.x) {
-		int minibatch_index = i % minibatch_size;
+		//int minibatch_index = i % minibatch_size;
 		int source_index = d_indicies[i];
 		if(source_index==-1) {
 			d_alignments[i] = 0;
@@ -1543,6 +1818,14 @@ __global__
 void add_two_mats_kernel(dType *d_mat1,dType *d_mat2,int size) {
 	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
 		d_mat1[i] = d_mat1[i] + d_mat2[i];
+	}
+}
+
+template<typename dType>
+__global__
+void add_two_mats_into_third_kernel(dType *d_mat1,dType *d_mat2,dType *d_mat3,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_mat1[i] = d_mat2[i] + d_mat3[i];
 	}
 }
 
@@ -1868,7 +2151,8 @@ void copy_errors_source(dType **d_total_hs_error,dType *d_temp_error,int *d_indi
 		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
 		if(source_index!=-1) {
 			for(int j=threadIdx.x; j < LSTM_size ;j+=blockDim.x) {
-				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_temp_error[IDX2C(j,minibatch_index,LSTM_size)];
+				//d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_temp_error[IDX2C(j,minibatch_index,LSTM_size)]; WWW
+				d_total_hs_error[d_batch_info[minibatch_index] - 1 - source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_temp_error[IDX2C(j,minibatch_index,LSTM_size)];
 			}
 		}
 	}	
@@ -1886,7 +2170,7 @@ void error_hs_ct_kernel(dType *d_ERRnTOt_ct, dType *d_alignments,int *d_indicies
 		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
 		if(source_index!=-1) {
 			for(int j= threadIdx.x; j<LSTM_size; j+=blockDim.x) {
-				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+				d_total_hs_error[d_batch_info[minibatch_index] - 1 - source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
 			}
 		}
 	}
@@ -1904,7 +2188,8 @@ void error_hs_ct_kernel_large(dType *d_ERRnTOt_ct, dType *d_alignments,int *d_in
 		int source_index = d_indicies[IDX2C(minibatch_index,alignment_index,minibatch_size)];
 		if(source_index!=-1) {
 			for(int j= threadIdx.x; j<LSTM_size; j+=blockDim.x) {
-				d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
+				//d_total_hs_error[source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)]; WWW
+				d_total_hs_error[d_batch_info[minibatch_index] - 1 - source_index + d_batch_info[minibatch_size + minibatch_index]][IDX2C(j,minibatch_index,LSTM_size)] += d_ERRnTOt_ct[IDX2C(j,minibatch_index,LSTM_size)]*d_alignments[IDX2C(minibatch_index,alignment_index,minibatch_size)];
 			}
 		}
 	}
@@ -1969,6 +2254,49 @@ void load_in_embeddings(dType *d_temp_embeddings,dType *d_D,int *d_samples,int n
 }
 
 template<typename dType>
+__global__
+void nce_dot_product_SPARSE(dType *d_dot_products,dType *d_D,dType *d_h_t,int *d_samples,int LSTM_size,int minibatch_size,int num_samples,int output_vocab_size) {
+
+	__shared__ dType buffer[NUM_NCE_THREADS];
+
+	//per block doing an embedding
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+
+	for(int k = blockIdx.x; k < num_samples*minibatch_size; k+=gridDim.x) {
+		int minibatch_index = k/num_samples;
+		int sample_index = k%num_samples;
+		int vocab_index = d_samples[IDX2C(sample_index,minibatch_index,num_samples)];
+		buffer[tid] = 0;
+
+		for(int i=i_start; i<i_end; i+=i_step) {
+			buffer[tid] += d_h_t[IDX2C(i,minibatch_index,LSTM_size)] * d_D[IDX2C(i,vocab_index,LSTM_size)];
+		}
+
+		 __syncthreads();
+
+		 for(int stride=NUM_NCE_THREADS/2; stride>0; stride>>=1) {
+			if(tid < stride) {
+				buffer[tid] += buffer[stride + tid];
+			}
+			__syncthreads();
+		}
+
+	  	__syncthreads();
+
+	  	
+		dType sum_k = buffer[0];
+		if(tid==0) {
+			d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] = sum_k; 
+		}
+		__syncthreads();
+	}
+}
+
+
+template<typename dType>
 __device__
 inline dType log_add_exp(dType x,dType y) {
 
@@ -1996,6 +2324,27 @@ void calc_p_true_kernel(dType *d_p_true,dType *d_dot_products,dType *d_sampling_
 			// 		d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]], d_sampling_probs[sample_index] \
 			// 		,log_add_exp(d_dot_products[IDX2C(sample_index,minibatch_index,num_samples)] + d_b_d[d_samples[sample_index]],d_sampling_probs[sample_index]));
 			// }
+		}
+		else {
+			//printf("Setting to zero\n");
+			d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)] = 0;
+		}
+	}		
+}
+
+
+//compute -P(true) for all of the elements
+template<typename dType>
+__global__
+void calc_p_true_kernel_nonshare(dType *d_p_true,dType *d_dot_products,dType *d_sampling_probs,dType *d_b_d,int *d_samples,int num_neg_samples,int minibatch_size,int *d_vocab_indicies_01) {
+
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<(num_neg_samples+1)*minibatch_size; i+=gridDim.x*blockDim.x) {
+		int minibatch_index = i/(num_neg_samples+1);
+		int sample_index = i%(num_neg_samples+1);
+		//printf("%i\n",d_samples[sample_index]);
+		if(d_vocab_indicies_01[minibatch_index]==1) {
+			d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)] = -1*cuda_exp_wrapper( d_dot_products[IDX2C(sample_index,minibatch_index,num_neg_samples+1)] + d_b_d[d_samples[sample_index]] - \
+				log_add_exp(d_dot_products[IDX2C(sample_index,minibatch_index,num_neg_samples+1)] + d_b_d[d_samples[sample_index]],d_sampling_probs[sample_index]) ); 
 		}
 		else {
 			//printf("Setting to zero\n");
@@ -2046,6 +2395,8 @@ void objective_val_p1_NCE_kernel(dType *d_p_true,double *d_OBJ_val_temp,int num_
 }
 
 
+
+
 //get the objective value for NCE
 template<typename dType>
 __global__
@@ -2062,6 +2413,22 @@ void objective_val_p2_NCE_kernel(dType *d_p_true,double *d_final_NCE_OBJ,double 
 			// }
 			assert(isinf_wrapper(cuda_log_wrapper(-d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]))==0);
 			d_final_NCE_OBJ[0]+=cuda_log_wrapper(-d_p_true[IDX2C(i,i+num_negative_samples,minibatch_size)]);
+		}
+	}
+}
+
+//get the objective value for NCE
+template<typename dType>
+__global__
+void objective_val_p2_NCE_kernel_nonshare(dType *d_p_true,double *d_final_NCE_OBJ,double *d_OBJ_val_temp,int num_negative_samples,int minibatch_size,int *d_vocab_indicies_01) {
+
+	for(int i=0; i<NUM_NCE_THREADS; i++) {
+		d_final_NCE_OBJ[0] +=d_OBJ_val_temp[i];
+	}
+
+	for(int i=0; i<minibatch_size; i++) {
+		if(d_vocab_indicies_01[i]==1) {
+			d_final_NCE_OBJ[0]+=cuda_log_wrapper(-d_p_true[IDX2C(i,1+num_negative_samples,minibatch_size)]);
 		}
 	}
 }
@@ -2091,12 +2458,127 @@ void error_ht_positive_kernel(dType *d_d_ERRt_ht,dType *d_p_true,dType *d_temp_e
 }
 
 
+template<typename dType>
+__global__
+void backprop_ht_SPARSE(dType *d_d_ERRt_ht,dType *d_D,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int num_neg_samples,dType *d_reduction_space) {
+
+	//per block doing an embedding
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	const int tid = threadIdx.x;
+
+	for(int k = blockIdx.x; k < (num_neg_samples+1)*minibatch_size; k+=gridDim.x) {
+		int minibatch_index = k/(num_neg_samples+1);
+		int sample_index = k%(num_neg_samples+1);
+		int vocab_index = d_samples[k];
+
+		if(sample_index!=num_neg_samples) {
+			for(int i=i_start; i<i_end; i+=i_step) {
+				d_reduction_space[sample_index + (num_neg_samples+1)*i + (num_neg_samples+1)*LSTM_size*minibatch_index] = d_D[IDX2C(i,vocab_index,LSTM_size)]*d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)];
+				//atomicAdd(&(d_d_ERRt_ht[(i,minibatch_index,LSTM_size)]),val);
+			}
+		}
+		else {
+			for(int i=i_start; i<i_end; i+=i_step) {
+				d_reduction_space[sample_index + (num_neg_samples+1)*i + (num_neg_samples+1)*LSTM_size*minibatch_index] = d_D[IDX2C(i,vocab_index,LSTM_size)]*(1+d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)]);
+				//atomicAdd(&(d_d_ERRt_ht[(i,minibatch_index,LSTM_size)]),val);
+			}
+		}
+	}
+
+	//now do the reduction
+	__syncthreads();
+	__shared__ dType buffer[NUM_NCE_THREADS];
+
+	//per block doing an embedding
+	i_start = threadIdx.x; //start at the thread index
+	i_end = num_neg_samples+1; //end at dim
+	i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < LSTM_size*minibatch_size; k+=gridDim.x) {
+		int minibatch_index = k/LSTM_size;
+		int lstm_index = k%LSTM_size;
+		buffer[tid] = 0;
+
+		for(int i=i_start; i<i_end; i+=i_step) {
+			buffer[tid] += d_reduction_space[i + (num_neg_samples+1)*lstm_index + (num_neg_samples+1)*LSTM_size*minibatch_index];
+		}
+
+		 __syncthreads();
+
+		 for(int stride=NUM_NCE_THREADS/2; stride>0; stride>>=1) {
+			if(tid < stride) {
+				buffer[tid] += buffer[stride + tid];
+			}
+			__syncthreads();
+		}
+
+	  	__syncthreads();
+
+	  	
+		dType sum_k = buffer[0];
+		if(tid==0) {
+			d_d_ERRt_ht[IDX2C(lstm_index,minibatch_index,LSTM_size)] = sum_k; 
+		}
+		__syncthreads();
+	}
+}
+
+
+template<typename dType>
+__global__
+void embedding_gradient_sparse(dType *d_D_grad,dType *d_h_t,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int num_neg_samples) {
+
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+	//int tid = threadIdx.x;
+
+	for(int k = blockIdx.x; k < (num_neg_samples+1)*minibatch_size; k+=gridDim.x) {
+		int minibatch_index = k/(num_neg_samples+1);
+		int sample_index = k%(num_neg_samples+1);
+		int vocab_index = d_samples[k];
+
+		if(sample_index!=num_neg_samples) {
+			for(int i=i_start; i<i_end; i+= i_step) {
+				dType val = d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)]*d_h_t[IDX2C(i,minibatch_index,LSTM_size)];
+				atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),val);
+			}
+		}
+		else {
+			for(int i=i_start; i<i_end; i+= i_step) {
+				dType val = (1+d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)])*d_h_t[IDX2C(i,minibatch_index,LSTM_size)];
+				atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),val);
+			}
+		}
+	}
+}
+
+
+template<typename dType>
+__global__
+void bias_gradient_sparse(dType *d_b_d_grad,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int num_neg_samples) {
+	for(int k = blockIdx.x; k < (num_neg_samples+1)*minibatch_size; k+=gridDim.x) {
+		int minibatch_index = k/(num_neg_samples+1);
+		int sample_index = k%(num_neg_samples+1);
+		int vocab_index = d_samples[k];
+
+		if(sample_index!=num_neg_samples) {
+			atomicAdd(&(d_b_d_grad[vocab_index]),d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)]);
+		}
+		else {
+			atomicAdd(&(d_b_d_grad[vocab_index]),1+d_p_true[IDX2C(minibatch_index,sample_index,minibatch_size)]);
+		}
+	}
+}
+
 
 
 //d_samples being passed in is pointing at the positive samples already
 template<typename dType>
 __global__
-void positive_embedding_NCE(dType *d_h_t,dType *d_D_grad,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int *d_vocab_indicies_01) {
+void positive_embedding_NCE(dType *d_h_t,dType *d_small_D_grad,dType *d_p_true,int *d_samples,int LSTM_size,int minibatch_size,int *d_vocab_indicies_01,int *d_reverse_unique_indicies) {
 	
 	int i_start = threadIdx.x; //start at the thread index
 	int i_end = LSTM_size; //end at dim
@@ -2106,7 +2588,8 @@ void positive_embedding_NCE(dType *d_h_t,dType *d_D_grad,dType *d_p_true,int *d_
 		int vocab_index = d_samples[k];
 		if(d_vocab_indicies_01[k]==1) {
 			for(int i= i_start; i < i_end; i += i_step) {
-				atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_h_t[IDX2C(i,k,LSTM_size)]*(1+d_p_true[IDX2C(k,k,minibatch_size)]));
+				//atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_h_t[IDX2C(i,k,LSTM_size)]*(1+d_p_true[IDX2C(k,k,minibatch_size)]));
+				atomicAdd(&(d_small_D_grad[IDX2C(i,d_reverse_unique_indicies[vocab_index],LSTM_size)]),d_h_t[IDX2C(i,k,LSTM_size)]*(1+d_p_true[IDX2C(k,k,minibatch_size)]));
 			}
 		}
 	}
@@ -2115,7 +2598,7 @@ void positive_embedding_NCE(dType *d_h_t,dType *d_D_grad,dType *d_p_true,int *d_
 
 template<typename dType>
 __global__
-void negative_embedding_NCE(dType *d_temp_D_grad,dType *d_D_grad,int *d_samples,int num_negative_samples,int LSTM_size) {
+void negative_embedding_NCE(dType *d_temp_D_grad,dType *d_small_D_grad,int *d_samples,int num_negative_samples,int LSTM_size,int *d_reverse_unique_indicies) {
 
 	int i_start = threadIdx.x; //start at the thread index
 	int i_end = LSTM_size; //end at dim
@@ -2124,10 +2607,40 @@ void negative_embedding_NCE(dType *d_temp_D_grad,dType *d_D_grad,int *d_samples,
 	for(int k = blockIdx.x; k < num_negative_samples; k+=gridDim.x) {
 		int vocab_index = d_samples[k];
 		for(int i= i_start; i < i_end; i += i_step) {
-			atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_temp_D_grad[IDX2C(i,k,LSTM_size)]);
+			//atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_temp_D_grad[IDX2C(i,k,LSTM_size)]);
+			atomicAdd(&(d_small_D_grad[IDX2C(i,d_reverse_unique_indicies[vocab_index],LSTM_size)]),d_temp_D_grad[IDX2C(i,k,LSTM_size)]);
 		}
 	}
 }
+
+
+__global__
+void setup_reverse_indicies(int *d_reverse_unique_indicies,int *d_unique_indicies,int curr_num_unique) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<curr_num_unique; i+=gridDim.x*blockDim.x) {
+		//int temp = d_unique_indicies[i];
+		//printf("%d\n",d_unique_indicies[i]);
+		d_reverse_unique_indicies[d_unique_indicies[i]] = i;
+	}
+}
+
+
+template<typename dType>
+__global__
+void update_sparse_grad(dType *d_mat,dType *d_small_grad,int *d_unique_indicies,int curr_num_unique,dType learning_rate,int LSTM_size) {
+	
+	int i_start = threadIdx.x; //start at the thread index
+	int i_end = LSTM_size; //end at dim
+	int i_step = blockDim.x; //the block dimension (aka the number of threads in the block) is the step
+
+	for(int k = blockIdx.x; k < curr_num_unique; k+=gridDim.x) {
+		int vocab_index = d_unique_indicies[k];
+		for(int i= i_start; i < i_end; i += i_step) {
+			//atomicAdd(&(d_D_grad[IDX2C(i,vocab_index,LSTM_size)]),d_temp_D_grad[IDX2C(i,k,LSTM_size)]);
+			d_mat[IDX2C(i,vocab_index,LSTM_size)] += learning_rate*d_small_grad[IDX2C(i,k,LSTM_size)];
+		}
+	}
+}
+
 
 template<typename dType>
 __global__
@@ -2151,6 +2664,7 @@ void positive_bias_NCE(dType *d_b_d_grad,dType *d_p_true,int *d_samples,int mini
 
 
 
+
 //----------------------------------------------- Truncated softmax stuff
 template<typename dType>
 __global__
@@ -2165,6 +2679,63 @@ void load_in_embeddings_trunc(dType *d_temp_embeddings,dType *d_D,int *d_samples
 		for(int i= i_start; i < i_end; i += i_step) {
 			d_temp_embeddings[IDX2C(i,k,LSTM_size)] = d_D[IDX2C(i,vocab_index,LSTM_size)];
 		}
+	}
+}
+
+
+
+
+
+
+
+
+//----------------------------------------------bidirectional encoder-----------------------------------------------
+template<typename dType>
+__global__
+void tanh_bi_forward_kernel(dType *d_mat,dType *d_bias,int LSTM_size,int minibatch_size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size*minibatch_size; i+=gridDim.x*blockDim.x) {
+		d_mat[i] = tanh_wrapper(d_mat[i] + d_bias[i%LSTM_size]);
+	}
+}
+
+//for bidirectional model
+//used for ht and ct
+template<typename dType>
+__global__
+void add_to_errors(dType *d_error_ht,dType *d_additional_error_ht,int LSTM_size,int index) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<LSTM_size; i+=gridDim.x*blockDim.x) {
+		d_error_ht[IDX2C(i,index,LSTM_size)] += d_additional_error_ht[IDX2C(i,index,LSTM_size)];
+	}
+}
+
+
+
+//-----------------------------------------------          -------------------------------------------------------
+template<typename dType>
+__global__
+void add_two_mats(dType *d_final,dType *d_mat1,dType *d_mat2,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_final[i] = d_mat1[i] + d_mat2[i];
+	}
+}
+
+
+template<typename dType>
+__global__
+void check_elems_kernel(dType *d_mat,int size) {
+	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		dType x = d_mat[i];
+		d_mat[i] = x;
+	}
+}
+
+
+template<typename dType>
+__global__ 
+void add_four_matrices_kernel_stride(dType *d_final,dType *d_mat1,dType *d_mat2,dType *d_mat3,dType *d_mat4,int size) 
+{
+  	for(int i=threadIdx.x + blockIdx.x*blockDim.x; i<size; i+=gridDim.x*blockDim.x) {
+		d_final[i] = d_mat1[i] + d_mat2[i] + d_mat3[i] + d_mat4[i];
 	}
 }
 

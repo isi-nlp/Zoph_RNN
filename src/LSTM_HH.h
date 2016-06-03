@@ -24,6 +24,7 @@ public:
 	int LSTM_size;
 	int index; //what node is this
 	bool attention_model = false; //this will only be true for the upper layer on the target side of the LSTM
+	bool multi_attention = false;
 
 	bool dropout;
 	dType dropout_rate;
@@ -67,6 +68,7 @@ public:
 	dType *d_ERRnTOt_h_tild;
 	dType *d_h_tild;
 
+	dType *d_bi_dir_ht; //the pointer to send h_t to the bi_directional layer
 
 	//Constructor
 	LSTM_HH_Node(int LSTM_size,int minibatch_size,struct Hidden_To_Hidden_Layer<dType> *m,int index,dType *d_zeros, bool dropout, 
@@ -96,6 +98,7 @@ public:
 	void dump_LSTM(std::ofstream &LSTM_dump_stream,std::string intro);
 
 	void send_h_t_above();
+
 };
 
 #endif

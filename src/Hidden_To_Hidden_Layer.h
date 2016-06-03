@@ -235,6 +235,14 @@ public:
 	int longest_sent;
 	attention_layer<dType> *attent_layer=NULL;
 
+	bool bi_dir = false; //flag for bidirectional encoder madness
+	bool nonrev_bi_dir = false; //This will only be true if using combine bi-dir and this is the nonrev encoder
+	int layer_number = -1; //start at 1, for indexing directly into the target layer
+
+	bool multi_source_attention = false;
+	attention_layer<dType> *attent_layer_bi=NULL; //for multi source stuff
+	attention_combiner_layer<dType> *att_comb_layer=NULL;
+
 	//for dropout
 	bool dropout;
 	dType dropout_rate;
@@ -250,7 +258,7 @@ public:
 	//Constructor
 	void init_Hidden_To_Hidden_Layer(int LSTM_size,int minibatch_size,
  		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed,
- 		bool dropout,dType dropout_rate);
+ 		bool dropout,dType dropout_rate,bool bi_dir,int layer_number);
 
 	
 	void init_Hidden_To_Hidden_Layer_GPU(int LSTM_size,int minibatch_size,
@@ -295,7 +303,7 @@ public:
 
 	void transfer_decoding_states_GPU(dType *d_h_t,dType *d_c_t);
 
-	void init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model);
+	void init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model,global_params &params);
 
 	void zero_attent_error();
 

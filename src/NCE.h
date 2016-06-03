@@ -32,19 +32,28 @@ public:
 
 	int curr_num_unique = 0; //for the current minibatch, how many unqiue samples are there
 
+	bool share_samples = true; //share the noise samples across the minibatch
+
 	multinomial<long long int,double> unigram;
 
 	dType *d_D; //For NCE this is embedding size by output vocab size, while in softmax it is the other way around
 	dType *d_b_d;
 	dType *d_dot_products; //stores dot product along with the embedding
 	dType *d_outputdist;
- 	dType *d_D_grad;
  	dType *d_b_d_grad;
  	dType *d_ones; // 1xminibatch size
  	dType *d_temp_b_d_grad; //1 x ( num negative samples + minibatchsize )
  	dType *d_temp_result;
  	dType *d_result;
  	dType *d_h_t;
+
+
+ 	//use curr_num_unique to get the length of this during training
+ 	//use d_unique_indicies for mapping
+ 	dType *d_small_D_grad; //this is (num neg samples + minibatchsize)*LSTM size*longestsent
+ 	int *d_reverse_unique_indicies; //for each possible vocab index
+ 	thrust::device_ptr<dType> thrust_d_small_D_grad;
+
 
  	thrust::device_ptr<dType> thrust_d_b_d_grad;
 
@@ -72,6 +81,8 @@ public:
 	double *h_partition_vals;
 	double *d_partition_vals;
 
+	dType *d_reductuction_space;
+
 	//these are for the inputs
 	int *d_output_vocab_indices;
 
@@ -83,6 +94,8 @@ public:
 
 	std::vector<NCE_Node<dType>> nodes;
 
+
+
 	NCE_layer() {}
 
 	void init_loss_layer(struct neuralMT_model<precision> *model,global_params &params);
@@ -92,6 +105,8 @@ public:
 
 	//prep gpu indicies
 	void prep_GPU_vocab_indices(int *h_output_vocab_indicies_target,int current_target_length);
+	void prep_GPU_vocab_indices_shared_samples(int *h_output_vocab_indicies_target,int current_target_length);
+	void prep_GPU_vocab_indices_nonshared_samples(int *h_output_vocab_indicies_target,int current_target_length);
 
 	void forward_prop(int index);
 
@@ -138,6 +153,8 @@ public:
 	void get_distribution_GPU_decoder_wrapper();
 
 	void check_gradient_GPU(dType epsilon,dType *d_mat,dType *d_grad,int rows,int cols);
+
+	void check_gradient_GPU_SPARSE(dType epsilon,dType *d_mat,dType *d_grad,int LSTM_size,int *d_unique_indicies,int curr_num_unique);
 
 };
 

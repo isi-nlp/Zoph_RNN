@@ -6,6 +6,7 @@
 #include <vector>
 #include <Eigen/Dense>
 #include "file_helper_decoder.h"
+#include "fileHelper_source.h"
 #include "decoder.h"
 #include "LSTM.h"
 #include "Eigen_Util.h"
@@ -26,6 +27,11 @@ class Hidden_To_Hidden_Layer;
 
 struct file_helper;
 
+namespace debug_flag {
+	bool flag = false;
+}
+
+
 template<typename dType>
 class neuralMT_model {
 public:
@@ -42,6 +48,15 @@ public:
 	//Hidden layers of model
 	std::vector<Hidden_To_Hidden_Layer<dType>> source_hidden_layers;
 	std::vector<Hidden_To_Hidden_Layer<dType>> target_hidden_layers;
+
+	//extra source encoder for bi-directional stuff. In bidirectional case, the indicies are in the forward direction
+	Input_To_Hidden_Layer<dType> input_layer_source_bi;
+	std::vector<Hidden_To_Hidden_Layer<dType>> source_hidden_layers_bi;
+
+	bi_encoder<dType> bi_dir_source; //the bidirectional wrapper
+
+	encoder_multi_source<dType> multi_source_layer; //for multiple source languages
+
 
 	/////////////////////////////////Other random stuff//////////////////////////////////////////////////
 
@@ -71,6 +86,10 @@ public:
 	//for the attention model
 	int source_length = -1;
 
+	//for birdirectional layer
+	bool bi_dir = false;
+	bool multi_source = false;
+
 	//attention model
 	attention_params attent_params;
 	std::ofstream output_alignments;
@@ -80,11 +99,27 @@ public:
 	std::ofstream LSTM_stream_dump;
 
 	//for decoding multilayer models, on index for each layer
+	bool decode = false;
 	std::vector<prev_source_state<dType>> previous_source_states;
+	std::vector<prev_source_state<dType>> previous_source_states_bi; //for bi_directional encoder
 	std::vector<prev_target_state<dType>> previous_target_states;
+	std::vector<dType*> top_source_states; //for attention model in decoder
+	std::vector<dType*> top_source_states_v2; //for attention model in decoder
+	attention_layer<dType> decoder_att_layer; //for decoding only
 
+	bool multi_attention = false;
+	bool multi_attention_v2 = false;
+
+	file_helper_source src_fh; //for training
+	file_helper_source *src_fh_test; //for training
+	std::string multisource_file; //for training and testing, it is the path to the correct file
+
+	bool char_cnn = false;
+	char_cnn_params char_params;
 
 	///////////////////////////////////Methods for the class//////////////////////////////////////////////
+
+	neuralMT_model() {};
 
 	//Called at beginning of program once to initialize the weights
 	void initModel(int LSTM_size,int minibatch_size,int source_vocab_size,int target_vocab_size,
@@ -95,7 +130,8 @@ public:
 
 	//For the decoder
 	void initModel_decoding(int LSTM_size,int beam_size,int source_vocab_size,int target_vocab_size,
-		int num_layers,std::string input_weight_file,int gpu_num,bool dump_LSTM,std::string LSTM_stream_dump,global_params &params);
+		int num_layers,std::string input_weight_file,int gpu_num,global_params &params,
+		bool attention_model,bool feed_input,bool multi_source,bool combine_LSTM,bool char_cnn);
 
 	//This initializes the streams,event and cuBLAS handlers, along with setting the GPU's for the layers
 	void init_GPUs();
@@ -104,7 +140,7 @@ public:
 	void print_GPU_Info();
 
 	//initialize prev states for decoding
-	void init_prev_states(int num_layers, int LSTM_size,int minibatch_size, int device_number);
+	void init_prev_states(int num_layers, int LSTM_size,int minibatch_size, int device_number,bool multi_source);
 
 	//Gets called one minibatch is formulated into a matrix
 	//This matrix is then passed in and forward/back prop is done, then gradients are updated
@@ -115,7 +151,7 @@ public:
 		int *h_output_vocab_indicies_source,int *h_input_vocab_indicies_target,int *h_output_vocab_indicies_target,
 		int current_source_length,int current_target_length,int *h_output_vocab_indicies_source_Wgrad,
 		int *h_input_vocab_indicies_target_Wgrad,int len_source_Wgrad,int len_target_Wgrad,int *h_sampled_indices,
-		int len_unique_words_trunc_softmax,int *h_batch_info);
+		int len_unique_words_trunc_softmax,int *h_batch_info,file_helper *temp_fh);
 
 	//Sets all gradient matrices to zero, called after a minibatch updates the gradients
 	void clear_gradients();
@@ -150,7 +186,7 @@ public:
 
 	//gets the perplexity of a file
 	double get_perplexity(std::string test_file_name,int minibatch_size,int &test_num_lines_in_file, int longest_sent,
-		int source_vocab_size,int target_vocab_size,std::ofstream &HPC_output,bool load_weights_val,int &test_total_words,
+		int source_vocab_size,int target_vocab_size,bool load_weights_val,int &test_total_words,
 		bool HPC_output_flag,bool force_decode,std::string fd_filename);
 
 	//Maps the file info pointer to the model
@@ -158,15 +194,18 @@ public:
 
 	void stoicastic_generation(int length,std::string output_file_name,double temperature);
 
-	void forward_prop_source(int *d_input_vocab_indicies_source,int *d_ones,int source_length,int LSTM_size);
-	void forward_prop_target(int curr_index,int *d_current_indicies,int *d_ones,int LSTM_size, int beam_size);
+	void forward_prop_source(int *d_input_vocab_indicies_source,int *d_input_vocab_indicies_source_bi,int *d_ones,
+		int source_length,int source_length_bi,int LSTM_size,int *d_char_cnn_indicies);
+
+	void forward_prop_target(int curr_index,int *d_current_indicies,int *d_ones,int LSTM_size, int beam_size,
+		int *d_char_cnn_indicies);
 
 	template<typename Derived>
 	void swap_decoding_states(const Eigen::MatrixBase<Derived> &indicies,int index,dType *d_temp_swap_vals);
 
 	void target_copy_prev_states(int LSTM_size, int beam_size);
 
-	void dump_alignments(int target_length,int minibatch_size,int *h_input_vocab_indicies_source,int *h_input_vocab_indicies_target);
+	void dump_alignments(int target_length,int minibatch_size,int *h_input_vocab_indicies_source,int *h_input_vocab_indicies_target,int *h_input_vocab_indicies_source_2);
 };
 
 #endif

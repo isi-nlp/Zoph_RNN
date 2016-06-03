@@ -27,6 +27,12 @@ void Hidden_To_Hidden_Layer<dType>::init_Hidden_To_Hidden_Layer_GPU(int LSTM_siz
 
 	full_matrix_setup(&h_b_i,&d_b_i,LSTM_size,1);
 	full_matrix_setup(&h_b_f,&d_b_f,LSTM_size,1);
+
+	thrust::device_ptr<dType> bias_ptr = thrust::device_pointer_cast(d_b_f);
+	for(int i=0; i<LSTM_size; i++) {
+		bias_ptr[i] = 1;
+	}
+	
 	full_matrix_setup(&h_b_c,&d_b_c,LSTM_size,1);
 	full_matrix_setup(&h_b_o,&d_b_o,LSTM_size,1);
 	full_matrix_setup(&h_b_i_grad,&d_b_i_grad,LSTM_size,1);
@@ -95,15 +101,14 @@ void Hidden_To_Hidden_Layer<dType>::init_Hidden_To_Hidden_Layer_GPU(int LSTM_siz
 
 	curandCreateGenerator(&rand_gen,CURAND_RNG_PSEUDO_DEFAULT);
 	boost::uniform_int<> unif_boost( 1, 1000000 );
-	curandSetPseudoRandomGeneratorSeed(rand_gen,unif_boost(BZ_CUDA::gen));
+	curandSetPseudoRandomGeneratorSeed(rand_gen,BZ_CUDA::curr_seed);
+	BZ_CUDA::curr_seed+=7;
 
 
 	clear_gradients(true);
 
 	cudaSetDevice(hh_layer_info.device_number);
 	cudaDeviceSynchronize();
-
-	cudaSetDevice(0);
 }
 
 
@@ -119,7 +124,7 @@ void Hidden_To_Hidden_Layer<dType>::zero_attent_error() {
 template<typename dType>
 void Hidden_To_Hidden_Layer<dType>::init_Hidden_To_Hidden_Layer(int LSTM_size,int minibatch_size,
  		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,
- 		struct neuralMT_model<precision> *model,int seed,bool dropout,dType dropout_rate)
+ 		struct neuralMT_model<precision> *model,int seed,bool dropout,dType dropout_rate,bool bi_dir,int layer_number)
 {
 
 	//Set the debug mode
@@ -133,6 +138,8 @@ void Hidden_To_Hidden_Layer<dType>::init_Hidden_To_Hidden_Layer(int LSTM_size,in
 	this->longest_sent = longest_sent;
 	this->dropout = dropout;
 	this->dropout_rate = dropout_rate;
+	this->bi_dir = bi_dir;
+	this->layer_number = layer_number;
 	gen.seed(seed);
 
 
@@ -150,14 +157,31 @@ void Hidden_To_Hidden_Layer<dType>::init_Hidden_To_Hidden_Layer(int LSTM_size,in
 
 
 template<typename dType>
-void Hidden_To_Hidden_Layer<dType>::init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model) {
+void Hidden_To_Hidden_Layer<dType>::init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model,global_params &params) {
 
 	attent_layer = new attention_layer<dType>(LSTM_size,minibatch_size,hh_layer_info.device_number,D,longest_sent,hh_layer_info.handle,model,
-		feed_input,clip_gradients,norm_clip);
+		feed_input,clip_gradients,norm_clip,dropout,dropout_rate,params,false);
+
+	if(params.multi_src_params.multi_attention) {
+		attent_layer_bi = new attention_layer<dType>(LSTM_size,minibatch_size,hh_layer_info.device_number,D,longest_sent,hh_layer_info.handle,
+			model,feed_input,clip_gradients,norm_clip,dropout,dropout_rate,params,true);
+
+		att_comb_layer = new attention_combiner_layer<dType>(params,hh_layer_info.device_number,model);
+
+		for(int i=0; i<longest_sent; i++) {
+			//att_comb_layer->nodes[i]->d_ht_1 = nodes[i].d_h_t;
+			//att_comb_layer->nodes[i]->d_ht_2 = nodes[i].d_h_t;
+		}
+
+		multi_source_attention = true;
+	}
 
 	//now switch on the attention flag in the attention nodes
 	for(int i=0; i<nodes.size(); i++) {
 		nodes[i].attention_model = true;
+		if(params.multi_src_params.multi_attention) {
+			nodes[i].multi_attention = true;
+		}
 	}
 }
 
@@ -194,6 +218,10 @@ void Hidden_To_Hidden_Layer<dType>::clear_gradients_GPU(bool init) {
 
 	if(attent_layer!=NULL) {
 		attent_layer->clear_gradients();
+		if(multi_source_attention) {
+			attent_layer_bi->clear_gradients();
+			att_comb_layer->clear_gradients();
+		}
 	}
 
 	devSynchAll();
@@ -215,24 +243,105 @@ void Hidden_To_Hidden_Layer<dType>::calculate_global_norm() {
 	cudaSetDevice(hh_layer_info.device_number);
 
 	scale_gradients();
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING INPUT LAYER NORMS -----------------------\n";
+	// }
 
 	norm_clip_GPU_v2_p1(thrust_d_W_hi_grad,d_W_hi_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_W_hi_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_W_hf_grad,d_W_hf_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_W_hf_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_W_hc_grad,d_W_hc_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_W_hc_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_W_ho_grad,d_W_ho_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
 
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_W_ho_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_b_i_grad,d_b_i_grad,norm_clip,LSTM_size*1,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_b_i_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_b_f_grad,d_b_f_grad,norm_clip,LSTM_size*1,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_b_f_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_b_c_grad,d_b_c_grad,norm_clip,LSTM_size*1,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_b_c_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_b_o_grad,d_b_o_grad,norm_clip,LSTM_size*1,d_temp_result,d_result);
 
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_b_o_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_M_i_grad,d_M_i_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_M_i_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_M_f_grad,d_M_f_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_M_f_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_M_o_grad,d_M_o_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_M_o_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_M_c_grad,d_M_c_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
+
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR d_M_c_grad -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
 	
 	if(attent_layer!=NULL) {
+		// if(BZ_CUDA::print_norms) {
+		// 	HPC_output << "******************* PRINTING SOURCE ATTENTION GRADIENTS ***********************\n";
+		// }
 		attent_layer->norm_p1();
+		if(multi_source_attention) {
+			// if(BZ_CUDA::print_norms) {
+			// 	HPC_output << "******************* PRINTING SOURCE BI ATTENTION GRADIENTS ***********************\n";
+			// }
+			attent_layer_bi->norm_p1();
+			att_comb_layer->norm_p1();		}
 	}
 
 	devSynchAll();
@@ -262,6 +371,10 @@ void Hidden_To_Hidden_Layer<dType>::update_global_params() {
 
 	if(attent_layer!=NULL) {
 		attent_layer->norm_p2();
+		if(multi_source_attention) {
+			attent_layer_bi->norm_p2();
+			att_comb_layer->norm_p2();
+		}
 	}
 
 	update_params();
@@ -298,6 +411,10 @@ void Hidden_To_Hidden_Layer<dType>::scale_gradients() {
 
 	if(attent_layer!=NULL) {
 		attent_layer->scale_gradients();
+		if(multi_source_attention) {
+			attent_layer_bi->scale_gradients();
+			att_comb_layer->scale_gradients();
+		}
 	}
 
 	devSynchAll();
@@ -312,54 +429,63 @@ void Hidden_To_Hidden_Layer<dType>::update_params() {
 	dType beta = 1;
 
 	devSynchAll();
-
 	//normal matrices
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s0);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_W_hi_grad, LSTM_size, &beta, d_W_hi, LSTM_size, d_W_hi, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s2);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_W_hf_grad, LSTM_size, &beta, d_W_hf, LSTM_size, d_W_hf, LSTM_size),"CUBLAS addition update parameter failed\n");
+	if( (deniz::source_side && deniz::train_source_RNN) || (!deniz::source_side && deniz::train_target_RNN) ) {
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s4);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_W_hc_grad, LSTM_size, &beta, d_W_hc, LSTM_size, d_W_hc, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s0);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_W_hi_grad, LSTM_size, &beta, d_W_hi, LSTM_size, d_W_hi, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s6);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_W_ho_grad, LSTM_size, &beta, d_W_ho, LSTM_size, d_W_ho, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s2);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_W_hf_grad, LSTM_size, &beta, d_W_hf, LSTM_size, d_W_hf, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s9);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_M_i_grad, LSTM_size, &beta, d_M_i, LSTM_size, d_M_i, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s4);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_W_hc_grad, LSTM_size, &beta, d_W_hc, LSTM_size, d_W_hc, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s10);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_M_f_grad, LSTM_size, &beta, d_M_f, LSTM_size, d_M_f, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s6);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_W_ho_grad, LSTM_size, &beta, d_W_ho, LSTM_size, d_W_ho, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s12);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_M_c_grad, LSTM_size, &beta, d_M_c, LSTM_size, d_M_c, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s9);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_M_i_grad, LSTM_size, &beta, d_M_i, LSTM_size, d_M_i, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-	cublasSetStream(hh_layer_info.handle,hh_layer_info.s11);
-	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
-		d_M_o_grad, LSTM_size, &beta, d_M_o, LSTM_size, d_M_o, LSTM_size),"CUBLAS addition update parameter failed\n");
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s10);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_M_f_grad, LSTM_size, &beta, d_M_f, LSTM_size, d_M_f, LSTM_size),"CUBLAS addition update parameter failed\n");
 
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s12);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_M_c_grad, LSTM_size, &beta, d_M_c, LSTM_size, d_M_c, LSTM_size),"CUBLAS addition update parameter failed\n");
 
-
-	add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s1>>>(d_b_i,d_b_i_grad,learning_rate,LSTM_size*1);
-	CUDA_GET_LAST_ERROR();
-	add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s3>>>(d_b_f,d_b_f_grad,learning_rate,LSTM_size*1);
-	CUDA_GET_LAST_ERROR();
-	add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s5>>>(d_b_c,d_b_c_grad,learning_rate,LSTM_size*1);
-	CUDA_GET_LAST_ERROR();
-	add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s7>>>(d_b_o,d_b_o_grad,learning_rate,LSTM_size*1);
-	CUDA_GET_LAST_ERROR();
+		cublasSetStream(hh_layer_info.handle,hh_layer_info.s11);
+		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(hh_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,LSTM_size, LSTM_size, &alpha, 
+			d_M_o_grad, LSTM_size, &beta, d_M_o, LSTM_size, d_M_o, LSTM_size),"CUBLAS addition update parameter failed\n");
 
 
-	if(attent_layer!=NULL) {
-		attent_layer->update_params();
+
+		add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s1>>>(d_b_i,d_b_i_grad,learning_rate,LSTM_size*1);
+		CUDA_GET_LAST_ERROR();
+		add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s3>>>(d_b_f,d_b_f_grad,learning_rate,LSTM_size*1);
+		CUDA_GET_LAST_ERROR();
+		add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s5>>>(d_b_c,d_b_c_grad,learning_rate,LSTM_size*1);
+		CUDA_GET_LAST_ERROR();
+		add_grad_vecs<<<(LSTM_size+256-1)/256,256,0,hh_layer_info.s7>>>(d_b_o,d_b_o_grad,learning_rate,LSTM_size*1);
+		CUDA_GET_LAST_ERROR();
+	}
+
+
+	if(deniz::train_attention_target_RNN) {
+		if(attent_layer!=NULL) {
+			attent_layer->update_params();
+			if(multi_source_attention) {
+				attent_layer_bi->update_params();
+				att_comb_layer->update_params();
+			}
+		}
 	}
 
 	devSynchAll();
@@ -392,13 +518,16 @@ void Hidden_To_Hidden_Layer<dType>::update_weights_GPU() {
 		
 		if(attent_layer!=NULL) {
 			attent_layer->clip_indiv();
+			if(multi_source_attention) {
+				attent_layer_bi->clip_indiv();
+				att_comb_layer->clip_indiv();
+			}
 		}
 
 		devSynchAll();
 	}
 
 	if(clip_gradients) {
-
 		norm_clip_GPU_v2(thrust_d_W_hi_grad,d_W_hi_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
 		norm_clip_GPU_v2(thrust_d_W_hf_grad,d_W_hf_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
 		norm_clip_GPU_v2(thrust_d_W_hc_grad,d_W_hc_grad,norm_clip,LSTM_size*LSTM_size,d_temp_result,d_result);
@@ -416,9 +545,12 @@ void Hidden_To_Hidden_Layer<dType>::update_weights_GPU() {
 
 		if(attent_layer!=NULL) {
 			attent_layer->clip_gradients_func();
+			if(multi_source_attention) {
+				attent_layer_bi->clip_gradients_func();
+				att_comb_layer->clip_gradients_func();
+			}
 		}
 	}
-
 	update_params();
 }
 
@@ -475,6 +607,10 @@ void Hidden_To_Hidden_Layer<dType>::check_all_gradients_GPU(dType epsilon) {
 
 		if(attent_layer!=NULL) {
 			attent_layer->check_gradients(epsilon);
+			if(multi_source_attention) {
+				attent_layer_bi->check_gradients(epsilon);
+				att_comb_layer->check_gradients(epsilon);
+			}
 		}
 
 }
@@ -549,9 +685,11 @@ void Hidden_To_Hidden_Layer<dType>::dump_weights_GPU(std::ofstream &output) {
 
 	if(attent_layer!=NULL) {
 		attent_layer->dump_weights(output);
+		if(multi_source_attention) {
+			attent_layer_bi->dump_weights(output);
+			att_comb_layer->dump_weights(output);
+		}
 	}
-
-	cudaSetDevice(0);
 }
 
 
@@ -568,6 +706,12 @@ void Hidden_To_Hidden_Layer<dType>::load_weights_GPU(std::ifstream &input) {
 	cudaSetDevice(hh_layer_info.device_number);
 
 	read_matrix_GPU(d_W_hi,LSTM_size,LSTM_size,input);
+
+	//std::cout << "PRINTING HIDDEN LAYER d_W_hi (0) and final\n";
+	//thrust::device_ptr<dType> temp_ptr = thrust::device_pointer_cast(d_W_hi);
+	//std::cout << temp_ptr[0] << "\n";
+	//std::cout << temp_ptr[LSTM_size*LSTM_size-1] << "\n";
+
 	read_matrix_GPU(d_b_i,LSTM_size,1,input);
 
 	read_matrix_GPU(d_W_hf,LSTM_size,LSTM_size,input);
@@ -586,9 +730,11 @@ void Hidden_To_Hidden_Layer<dType>::load_weights_GPU(std::ifstream &input) {
 
 	if(attent_layer!=NULL) {
 		attent_layer->load_weights(input);
+		if(multi_source_attention) {
+			attent_layer_bi->load_weights(input);
+			att_comb_layer->load_weights(input);
+		}
 	}
-
-	cudaSetDevice(0);
 }
 
 
@@ -620,9 +766,11 @@ void Hidden_To_Hidden_Layer<dType>::prep_GPU_vocab_indices(int *h_input_vocab_in
 
 	if(attent_layer!=NULL) {
 		attent_layer->transfer_done = false;
+		if(multi_source_attention) {
+			att_comb_layer->transfer_done = false;
+		}
 	}
 
-	cudaSetDevice(0);
 }
 
 

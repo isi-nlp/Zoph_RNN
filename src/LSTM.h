@@ -30,6 +30,7 @@ public:
 	dType *d_dropout_mask;
 	bool attention_model = false; //this will only be true for the upper layer on the target side of the LSTM
 	bool feed_input = false;
+	bool multi_attention = false;
 
 
 	//host pointers
@@ -70,12 +71,14 @@ public:
 	dType *d_h_tild;
 
 
+	dType *d_bi_dir_ht; //the pointer to send h_t to the bi_directional layer
+
+
 	//Constructor
 	LSTM_IH_Node(int LSTM_size,int minibatch_size,int vocab_size,struct Input_To_Hidden_Layer<dType> *m,int index,dType *d_zero_ptr,bool dropout,
 		dType dropout_rate);
 
 	void init_LSTM_GPU(int LSTM_size,int minibatch_size,int vocab_size,struct Input_To_Hidden_Layer<dType> *m);
-
 
 	void update_vectors_forward_GPU(int *d_input_vocab_indices,int *d_input_vocab_indices_01,
 		dType *d_h_t_prev,dType *d_c_t_prev);
@@ -85,7 +88,7 @@ public:
 	void forward_prop();
 	void forward_prop_GPU();
 
-	void back_prop_GPU();
+	void back_prop_GPU(int index);
 
 	//Update the gradient matrices
 	void compute_gradients_GPU();

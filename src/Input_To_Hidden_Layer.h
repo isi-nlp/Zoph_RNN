@@ -12,41 +12,41 @@ class Input_To_Hidden_Layer {
 public:
 	//Parameters for the model
 	//The parameters need to connect input to input gate
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hi;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hf;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hc;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_ho;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hi;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hf;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_hc;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> W_ho;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o;
 
 	/////////////////////////////////Stores the gradients for the models/////////////////////////////////
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hi_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hf_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hc_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_ho_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o_grad;
-	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hi_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_i_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hf_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_f_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_hc_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_c_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_ho_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, 1> b_o_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> W_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_i_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_f_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_o_grad;
+//	Eigen::Matrix<dType, Eigen::Dynamic, Eigen::Dynamic> M_c_grad;
 
 	/////////////////////////////////Current minibatch info for the model///////////////////////////////////
 	std::vector<LSTM_IH_Node<dType>> nodes; //Stores all the LSTM nodes for forward and backward propagation
-	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_hidden_vector; //Initial hidden state vector
-	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_cell_vector; //Initial cell vector for LSTM
-	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ht; 
-	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ct;
+//	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_hidden_vector; //Initial hidden state vector
+//	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_cell_vector; //Initial cell vector for LSTM
+//	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ht; 
+//	Eigen::Matrix<dType,Eigen::Dynamic,Eigen::Dynamic> init_d_ERRnTOtp1_ct;
 
 
 
@@ -113,7 +113,7 @@ public:
 	 //contains the entire input sequence, use pointer arithmetic to pass correct segments to LSTM cells
 	int *h_input_vocab_indices_full; //only for debugging
 	int *h_input_vocab_indices_01_full; //only for debugging
-	int *h_input_vocab_indicies_Wgrad; //only for debugging
+	int *h_input_vocab_indicies_Wgrad;
 	int *d_input_vocab_indices_full;
 	int *d_input_vocab_indices_01_full;
 	int *d_input_vocab_indicies_Wgrad;
@@ -172,7 +172,13 @@ public:
 	dType *d_M_o;
 	dType *d_M_c;
 
-	dType *d_W_grad;
+	//dType *d_W_grad;
+
+
+	dType *d_small_W_grad;
+	thrust::device_ptr<dType> thrust_d_small_W_grad;
+	int *d_reverse_unique_indicies;
+
 
 	dType *d_b_i;
 	dType *d_b_f;
@@ -222,6 +228,8 @@ public:
 	dType *d_d_ERRnTOt_htM1;
 	dType *d_d_ERRnTOt_ctM1;
 
+	dType *d_conv_char_error;
+
 	//thrust device pointers to doing parameter updates nicely (not input word embeddings though)
 	thrust::device_ptr<dType> thrust_d_W_ho_grad; 
 	thrust::device_ptr<dType> thrust_d_W_hf_grad;
@@ -267,6 +275,17 @@ public:
 	attention_layer<dType> *attent_layer=NULL;
 	bool feed_input = false;
 
+	bool multi_source_attention = false;
+	attention_layer<dType> *attent_layer_bi=NULL; //for multi source stuff
+	attention_combiner_layer<dType> *att_comb_layer=NULL;
+	conv_char_layer<dType> *char_cnn_layer = NULL;
+	bool char_cnn = false;
+
+	bool bi_dir = false;
+	bool nonrev_bi_dir = false; //This will only be true if using combine bi-dir and this is the nonrev encoder
+	bool share_embeddings = false;
+	bool combine_embeddings = false; //this is true for the nonrev encoder in the bi-directional model
+	
 	//for dropout
 	bool dropout;
 	dType dropout_rate;
@@ -278,13 +297,17 @@ public:
 	///////////////////////////////////////////Function Declarations///////////////////////////////
 	Input_To_Hidden_Layer() {};
 
+	void check_gradient_GPU_SPARSE(dType epsilon,dType *d_mat,dType *d_grad,int LSTM_size,int *h_unique_indicies,int curr_num_unique);
+
 	//Constructor
 	void init_Input_To_Hidden_Layer(int LSTM_size,int minibatch_size,int vocab_size,
  		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed,
- 		bool dropout,dType dropout_rate);
+ 		bool dropout,dType dropout_rate,bool is_bi_dir,bool share_embeddings,dType *d_embedding_ptr,bool combine_embeddings,
+ 		global_params &params, bool source);
 
 	void init_Input_To_Hidden_Layer_GPU(int LSTM_size,int minibatch_size,int vocab_size,
- 		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed);
+ 		int longest_sent,bool debug_temp,dType learning_rate,bool clip_gradients,dType norm_clip,struct neuralMT_model<precision> *model,int seed,
+ 		bool share_embeddings,dType *d_embedding_ptr,bool combine_embeddings,global_params &params,bool source);
 
 	//Clear the previous gradients
 	void clear_gradients(bool init);
@@ -306,6 +329,7 @@ public:
 	void load_weights(std::ifstream &input);
 	void load_weights_GPU(std::ifstream &input);
 
+	void prep_char_cnn(int *h_vocab_indicies_full,int curr_sent_len,int *h_unique_chars_minibatch,int num_unique_chars_minibatch);
 
 	template<typename Derived,typename Derived3>
 	void check_gradient(dType epsilon,const Eigen::MatrixBase<Derived3> &parameter_const,const Eigen::MatrixBase<Derived> &grad);
@@ -326,15 +350,21 @@ public:
 
 	void transfer_decoding_states_GPU(dType *d_h_t,dType *d_c_t);
 
-	void init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model);
+	void init_attention(int device_number,int D,bool feed_input,neuralMT_model<dType> *model,global_params &params);
 
 	void zero_attent_error();
 
-	void init_feed_input(Hidden_To_Hidden_Layer<dType> *hidden_layer);
+	void init_feed_input(Hidden_To_Hidden_Layer<dType> *hidden_layer,bool multi_attention);
 
 	void scale_gradients();
 
 	void update_params();
+
+	void decoder_init_feed_input();
+
+	void load_weights_decoder_feed_input(std::ifstream &input);
+
+	void load_weights_charCNN(std::ifstream &input);
 };
 
 

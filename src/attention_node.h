@@ -15,7 +15,12 @@ public:
 	int minibatch_size;
 	int device_number;
 	int D; //alignment width
+	bool dropout;
+	dType dropout_rate;
+	dType *d_dropout_mask;
 
+	bool multi_attention = false;
+	bool multi_attention_v2 = false;
 
 	dType *d_tanh_1;
 	dType *d_sigma_1;
@@ -29,6 +34,21 @@ public:
 	int *d_lower_upper;
 	int *d_indicies;
 	dType sigma_sq;
+	dType *d_h_t_att;
+
+	//for attention_model_v2
+	dType *d_tanh_1_v2;
+	dType *d_sigma_1_v2;
+	dType *d_p_t_v2; // size (1,minibatch size)
+	dType *d_alignments_v2; // size (minibatch size x 2D + 1)
+	dType *d_c_t_v2; // size (LSTM size, minibatch size)
+	dType *d_exped_scored_v2; //multiply these witha binary mask, so if alignments go off edge then just set to zero
+	int *d_lower_upper_v2;
+	int *d_indicies_v2;
+	dType *d_h_t_Wa_cache_v2; //precompute h_t multiplied by W_a
+	dType *d_hs_mat_v2;
+	dType *d_cached_exp_v2;
+
 
 	int **d_indicies_mask; //points to the LSTM node for this info for zeroing out forward and back prop
 
@@ -48,13 +68,18 @@ public:
 
 	int index;
 
-	attention_node(int LSTM_size,int minibatch_size,int device_number,int D,bool feed_input,attention_layer<dType> *attent_layer,int index);
+	attention_node(int LSTM_size,int minibatch_size,int device_number,int D,bool feed_input,attention_layer<dType> *attent_layer,int index,
+		bool dropout,dType dropout_rate,bool multi_attention,bool multi_attention_v2);
 
 	void forward_prop();
 
 	void back_prop();
 
 	void feed_input_init(dType *d_ptr_htild);
+
+	void debug_func();
+
+	void debug_checker();
 
 };
 

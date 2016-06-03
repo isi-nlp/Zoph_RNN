@@ -9,6 +9,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include "Eigen_Util.h"
+#include "file_helper_char_decoder.h"
 
 
 struct file_helper_decoder {
@@ -31,11 +32,16 @@ struct file_helper_decoder {
 	//-----------------------------------------GPU Parameters---------------------------------------------
 
 	int *h_input_vocab_indicies_source; //This is the pointer to memory on the CPU
+	int *h_batch_info;
+
+	bool char_cnn = false;
+	file_helper_char_decoder *fhc;
 
 	file_helper_decoder() { }
 
 	//Constructor
-	file_helper_decoder(std::string file_name,int &num_lines_in_file,int max_sent_len) {
+	file_helper_decoder(std::string file_name,int &num_lines_in_file,int max_sent_len,
+		char_cnn_params &cnp,std::string char_file) {
 		this->file_name = file_name;
 		input_file.open(file_name.c_str(),std::ifstream::in); //Open the stream to the file
 		//this->num_lines_in_file = num_lines_in_file;
@@ -43,22 +49,33 @@ struct file_helper_decoder {
 
 		//GPU allocation
 		h_input_vocab_indicies_source = (int *)malloc(max_sent_len * sizeof(int));
+		h_batch_info = (int *)malloc(2 * sizeof(int));
 
 		int total_words;
 		int target_words;
 		get_file_stats(num_lines_in_file,total_words,input_file,target_words);
 		this->num_lines_in_file = num_lines_in_file;
 
+		if(cnp.char_cnn) {
+			this->char_cnn = cnp.char_cnn;
+			fhc = new file_helper_char_decoder(max_sent_len,cnp.longest_word,
+				char_file);
+		}
 	}
 
 	~file_helper_decoder() {
 		free(h_input_vocab_indicies_source);
+		free(h_batch_info);
 		input_file.close();
 	}
 
 	//Read in the next minibatch from the file
 	//returns bool, true is same epoch, false if now need to start new epoch
 	bool read_sentence() {
+
+		if(char_cnn) {
+			fhc->read_minibatch();
+		}
 
 		bool more_lines_in_file = true; //returns false when the file is finished
 		words_in_sent=0; //For throughput calculation
@@ -88,6 +105,9 @@ struct file_helper_decoder {
 			input_file.clear();
 			input_file.seekg(0, std::ios::beg);
 			more_lines_in_file = false;
+			if(char_cnn) {
+				fhc->reset_file();
+			}
 		}
 
 		//Now fill in the minibatch_tokens_input and minibatch_tokens_output
@@ -102,6 +122,9 @@ struct file_helper_decoder {
 		// for(int i=0; i < words_in_sent; i++) {
 		// 	std::cout << h_input_vocab_indicies_source[i] << "   " << minibatch_tokens_source_input(i) << "\n";
 		// }
+
+		h_batch_info[0] = sentence_length;
+		h_batch_info[1] = 0;
 
 		return more_lines_in_file;
 	}

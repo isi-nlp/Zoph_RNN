@@ -1,6 +1,8 @@
 #ifndef DECODER_MODEL_WRAPPER_H
 #define DECODER_MODEL_WRAPPER_H
 
+#include "file_helper_decoder.h"
+
 template<typename dType>
 class neuralMT_model;
 
@@ -17,22 +19,47 @@ public:
 
 	neuralMT_model<dType> *model; //This is the model
 
+	file_helper_decoder *fileh; //for file input, so each file can get read in seperately
+	file_helper_decoder *fileh_multi_src; //reads in additional multi-source file
+
 	int source_length; //current length of the source sentence being decoded
 	int beam_size;
 	int source_vocab_size;
 	int target_vocab_size;
 	int num_layers;
 	int LSTM_size;
-	std::string weights_file_name;
-	std::string input_file_name;
+	bool attention_model;
+	bool feed_input;
+	bool combine_LSTM;
+	int num_lines_in_file = -1;
+	int longest_sent;
+
+	bool multi_source = false;
+	int source_length_bi; //current length of the source sentence being decoded
+	int *d_input_vocab_indicies_source_bi;
+
+	bool char_cnn = false;
+	int *d_char_vocab_indicies_source;
+	int longest_word;
+	std::unordered_map<int,std::vector<int>> word_to_char_map; //for word index, what is the character sequence, this is read from a file
+	int *h_new_char_indicies;
+	int *d_new_char_indicies;
+
+	std::string main_weight_file;
+	std::string multi_src_weight_file;
+	std::string main_integerized_file;
+	std::string multi_src_integerized_file;
 
 	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> outputdist;
+	std::vector<int> viterbi_alignments_ind; //individual viterbi alignments before voting
+	std::vector<dType> viterbi_alignments_scores; //individual viterbi scores
 
 	decoder_model_wrapper() {};
-	decoder_model_wrapper(int gpu_num,int beam_size,std::string weights_file_name,int longest_sent,bool dump_LSTM,std::string LSTM_stream_dump_name,
-		global_params &params);
+	decoder_model_wrapper(int gpu_num,int beam_size,
+		std::string main_weight_file,std::string multi_src_weight_file,std::string main_integerized_file,
+		std::string multi_src_integerized_file,int longest_sent,global_params &params);
 	void extract_model_info(std::string weights_file_name); //get how many layers, hiddenstate size, vocab sizes, etc
-	void memcpy_vocab_indicies(int *h_input_vocab_indicies_source,int sentence_length);
+	void memcpy_vocab_indicies();
 	void forward_prop_source();
 	void forward_prop_target(int curr_index,int *h_current_indicies);
 

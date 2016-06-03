@@ -62,6 +62,8 @@ void readMatrix(const Eigen::MatrixBase<Derived> &matrixConst,std::ifstream &inp
 	std::getline(input, temp_string);
 }
 
+
+
 template<typename Derived>
 void writeMatrix(const Eigen::MatrixBase<Derived> &matrix_const,std::ofstream &output) {
 
@@ -76,6 +78,7 @@ void writeMatrix(const Eigen::MatrixBase<Derived> &matrix_const,std::ofstream &o
 	}
 	output << "\n";
 }
+
 
 template<typename dType>
 void read_matrix_GPU(dType *d_mat,int rows,int cols,std::ifstream &input) {
@@ -108,6 +111,39 @@ void read_matrix_GPU(dType *d_mat,int rows,int cols,std::ifstream &input) {
 	free(temp_mat);
 }
 
+
+template<typename dType>
+void read_matrix_GPU_T(dType *d_mat,int rows,int cols,std::ifstream &input) {
+
+	//thrust::device_ptr<dType> d_ptr = thrust::device_pointer_cast(d_mat);
+	dType *temp_mat = (dType *)malloc(rows*cols*sizeof(dType));
+	
+	std::string temp_string;
+	std::string temp_token;
+	//std::cout << matrixConst.rows() << "\n";
+	//std::cout << matrixConst.cols() << "\n";
+	for(int i=0; i<cols; i++) {
+		//std::string temp_string;
+		std::getline(input, temp_string);
+		//input.sync();
+		//std::cout << temp_string << " ||| "<< i<<"\n";
+		std::istringstream iss_input(temp_string, std::istringstream::in);
+		for(int j=0; j<rows; j++) {
+			//std::string temp_token;
+			iss_input >> temp_token;
+			//std::cout << temp_token << "\n";
+			temp_mat[IDX2C(j,i,rows)] = std::stod(temp_token);
+		}
+	}
+	//std::string temp_string;
+	//get the final space
+	std::getline(input, temp_string);
+
+	cudaMemcpy(d_mat,temp_mat,rows*cols*sizeof(dType),cudaMemcpyHostToDevice);
+	free(temp_mat);
+}
+
+
 template<typename dType>
 void write_matrix_GPU(dType *d_mat,int rows,int cols,std::ofstream &output) {
 	//thrust::device_ptr<dType> d_ptr = thrust::device_pointer_cast(d_mat);
@@ -117,6 +153,24 @@ void write_matrix_GPU(dType *d_mat,int rows,int cols,std::ofstream &output) {
 		for(int j=0; j<cols; j++) {
 			output << temp_mat[IDX2C(i,j,rows)];
 			if(j!=cols-1) {
+				output << " ";
+			}
+		}
+		output << "\n";
+	}
+	output << "\n";
+	free(temp_mat);
+}
+
+template<typename dType>
+void write_matrix_GPU_T(dType *d_mat,int rows,int cols,std::ofstream &output) {
+	//thrust::device_ptr<dType> d_ptr = thrust::device_pointer_cast(d_mat);
+	dType *temp_mat = (dType *)malloc(rows*cols*sizeof(dType));
+	cudaMemcpy(temp_mat,d_mat,rows*cols*sizeof(dType),cudaMemcpyDeviceToHost);
+	for(int j=0; j<cols; j++) {
+		for(int i=0; i<rows; i++) {
+			output << temp_mat[IDX2C(i,j,rows)];
+			if(j!=rows-1) {
 				output << " ";
 			}
 		}
@@ -183,6 +237,122 @@ void get_file_stats(int &num_lines,int &num_words,std::ifstream &input,int &tota
     }
     input.clear();
 	input.seekg(0, std::ios::beg);
+}
+
+//for multisource MT
+void get_file_stats_source(int &num_lines,std::ifstream &input) {
+	std::string str; 
+	std::string word;
+	num_lines =0;
+    while (std::getline(input, str)){
+        num_lines++;
+    }
+
+    input.clear();
+	input.seekg(0, std::ios::beg);
+}
+
+
+//for using the charCNN model
+void extract_char_info(int &longest_word,int &num_unique_chars_source,int &num_unique_chars_target,
+	int &source_vocab_size,int &target_vocab_size,std::string char_mapping_name,std::string word_mapping_name) 
+{
+	std::ifstream char_stream;
+	std::ifstream word_stream;
+	char_stream.open(char_mapping_name.c_str());
+	word_stream.open(word_mapping_name.c_str());
+
+	std::vector<std::string> params;
+	std::string temp_line; //for getline
+	std::string temp_word;
+
+	std::getline(char_stream,temp_line);
+	std::istringstream my_ss(temp_line, std::istringstream::in);
+	while(my_ss >> temp_word) {
+		params.push_back(temp_word);
+	}
+
+	num_unique_chars_source = std::stoi(params[0]);
+	num_unique_chars_target = std::stoi(params[1]);
+	longest_word = std::stoi(params[2]);
+
+	params.clear();
+	std::getline(word_stream,temp_line);
+	std::istringstream my_sss(temp_line, std::istringstream::in);
+	while(my_sss >> temp_word) {
+		params.push_back(temp_word);
+	}
+
+	target_vocab_size = std::stoi(params[2]);
+	source_vocab_size = std::stoi(params[3]);
+
+	char_stream.close();
+	word_stream.close();
+}
+
+
+//for charCNN decoding
+void extract_charCNN(std::unordered_map<int,std::vector<int>> &word_to_char_map,std::string file_name) {
+	
+	std::ifstream mapping_stream;
+	mapping_stream.open(file_name.c_str());
+	std::string temp_line; //for getline
+	std::string temp_word;
+
+    while (std::getline(mapping_stream, temp_line)){
+    	std::istringstream ss(temp_line, std::istringstream::in);
+    	bool first = true;
+    	std::vector<int> temp_vec;
+    	int key = -1;
+		while(ss >> temp_word) {
+			if(first) {
+				first = false;
+				key = std::stoi(temp_word);
+			}
+			else {
+				temp_vec.push_back(std::stoi(temp_word));
+			}
+		}
+		if(word_to_char_map.count(key)!=0) {
+			BZ_CUDA::logger << "ERROR IN extract_charCNN\n";
+			exit (EXIT_FAILURE);
+		}
+		word_to_char_map[key] = temp_vec;
+		//std::cout << "Word: " << key << "\n";
+		// std::cout << "Char: ";
+		// for(int i=0; i<temp_vec.size(); i++) {
+		// 	std::cout << temp_vec[i] << " ";
+		// }
+		// std::cout << "\n\n";
+    }
+    mapping_stream.close();
+}
+
+//for charCNN decoding
+void create_char_vocab(int *h_word_indicies,int num_words,int longest_word,int *h_char_indicies,
+	std::unordered_map<int,std::vector<int>> &word_to_char_map) 
+{
+	int curr_char_index=0;
+	for(int i=0; i<num_words; i++) {
+		int word_index = h_word_indicies[i];
+		//std::cout << "Word index: " << word_index << "\n";
+		std::vector<int> char_vec = word_to_char_map[word_index];
+		// std::cout << "char vec:\n";
+		// for(int j=0; j<char_vec.size(); j++) {
+		// 	std::cout << char_vec[j] << " ";
+		// }
+		// std::cout << "\n\n";
+
+		int num_pad = longest_word - char_vec.size();
+		for(int j=0; j<char_vec.size(); j++) {
+			h_char_indicies[curr_char_index] = char_vec[j];
+			curr_char_index++;
+		}
+		for(int j=0; j<num_pad; j++) {
+			h_char_indicies[curr_char_index] = -1;
+			curr_char_index++;
+		}
+	}
 }
 
 

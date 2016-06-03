@@ -10,6 +10,10 @@
 #include <Eigen/Dense>
 #include <Eigen/Core>
 #include <unordered_map>
+#include "Eigen_Util.h"
+#include "char_file_helper.h"
+
+struct char_cnn_params;
 
 //templated for float or doubles
 struct file_helper {
@@ -64,6 +68,10 @@ struct file_helper {
 
 	//for perplexity
 	int total_target_words;
+
+	//character stuff
+	bool char_cnn = false;
+	file_helper_char *fhc;
 
 	bool truncated_softmax;
 	int shortlist_size;
@@ -202,16 +210,16 @@ struct file_helper {
 
 		for(int i=0; i < minibatch_size*current_target_length; i++) {
 			if(h_input_vocab_indicies_target[i] >= target_vocab_size) {
-				std::cerr << "ERROR BIGGER THAN MAX TARGET SIZE\n";
-				std::cerr << "Target sentence length: " << current_target_length << "\n";
-				std::cerr << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
+				BZ_CUDA::logger << "ERROR BIGGER THAN MAX TARGET SIZE\n";
+				BZ_CUDA::logger << "Target sentence length: " << current_target_length << "\n";
+				BZ_CUDA::logger << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
 				exit (EXIT_FAILURE);
 			}
 			else if(h_input_vocab_indicies_target[i] < -1) {
-				std::cerr << "ERROR BIGGER THAN MAX TARGET SIZE\n";
-				std::cerr << "Target sentence length: " << current_target_length << "\n";
-				std::cerr << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
-				std::cout << "i= " << i << "\n";
+				BZ_CUDA::logger << "ERROR BIGGER THAN MAX TARGET SIZE\n";
+				BZ_CUDA::logger << "Target sentence length: " << current_target_length << "\n";
+				BZ_CUDA::logger << h_input_vocab_indicies_target[i] << " " << target_vocab_size << "\n";
+				BZ_CUDA::logger << "i= " << i << "\n";
 				exit (EXIT_FAILURE);
 			}
 
@@ -301,7 +309,7 @@ struct file_helper {
 
 	//Constructor
 	file_helper(std::string fn,int ms,int &nlif,int max_sent_len,int source_vocab_size,int target_vocab_size,int &total_words,bool truncated_softmax,int shortlist_size,
-		int sampled_size)
+		int sampled_size,char_cnn_params &cnp,std::string char_file)
 	{
 		file_name = fn;
 		minibatch_size = ms;
@@ -344,15 +352,22 @@ struct file_helper {
 		h_sampled_indices = (int *)malloc(sampled_size * sizeof(int));
 
 		h_batch_info = (int *)malloc(2*minibatch_size * sizeof(int));
-
+		
+		//std::cout << "CHAR_FILE: " << char_file << "\n";
+		//for character stuff
+		if(cnp.char_cnn) {
+			this->char_cnn = cnp.char_cnn;
+			fhc = new file_helper_char(max_sent_len,cnp.longest_word,minibatch_size,
+				cnp.num_unique_chars_source,cnp.num_unique_chars_target,char_file);
+		}
 	}
 
 	//Read in the next minibatch from the file
 	//returns bool, true is same epoch, false if now need to start new epoch
 	bool read_minibatch() {
 
-		int max_sent_len_source = 0;
-		int max_sent_len_target = 0;
+		//int max_sent_len_source = 0;
+		//int max_sent_len_target = 0;
 		bool sameEpoch = true;
 		words_in_minibatch=0; //For throughput calculation
 
@@ -362,14 +377,24 @@ struct file_helper {
 		int current_temp_target_input_index = 0;
 		int current_temp_target_output_index = 0;
 
+		if(char_cnn) {
+			fhc->read_minibatch();
+		}
+
 		//std::cout << "Begin minibatch(Now printing input that was in the file)\n";
 		//Now load in the minibatch
+		//std::cout << "current_line_in_file: " << current_line_in_file << "\n";
+		//std::cout << "nums_lines_in_file: " << nums_lines_in_file << "\n";
 		for(int i=0; i<minibatch_size; i++) {
 			if(current_line_in_file > nums_lines_in_file) {
 				input_file.clear();
 				input_file.seekg(0, std::ios::beg);
 				current_line_in_file = 1;
 				sameEpoch = false;
+
+				if(char_cnn) {
+					fhc->reset_file();
+				}
 				break;
 			}
 
@@ -403,12 +428,9 @@ struct file_helper {
 				output_source_length+=1;
 				current_temp_source_output_index+=1;
 			}
-			//std::cout << "\n";
-			//CHANGED
-			//words_in_minibatch+=temp_input_sentence_source->size();
-			//max_sent_len_source = temp_input_sentence_source->size();
+
 			words_in_minibatch+=input_source_length;
-			max_sent_len_source = input_source_length;
+			//max_sent_len_source = input_source_length;
 
 			///////////////////////////////////Process the target////////////////////////////////////
 			std::istringstream iss_input_target(temp_input_target, std::istringstream::in);
@@ -429,18 +451,13 @@ struct file_helper {
 				current_temp_target_output_index+=1;
 				output_target_length+=1;
 			}
-			//std::cout << "\n";
 
 			current_source_length = input_source_length;
 			current_target_length = input_target_length;
-			//std::cout << "Current input source length: " << input_source_length << "\n";
-			//std::cout << "Current input target length: " << input_target_length << "\n";
-
-			//CHANGED
-			//words_in_minibatch += temp_input_sentence_target->size();
-			//max_sent_len_target = temp_input_sentence_target->size();
 			words_in_minibatch += input_target_length; 
-			max_sent_len_target = input_target_length;
+			//max_sent_len_target = input_target_length;
+
+			//std::cout << "current target length p1: " << current_target_length << "\n";
 
 			//Now increase current line in file because we have seen two more sentences
 			current_line_in_file+=4;
@@ -450,6 +467,9 @@ struct file_helper {
 			input_file.clear();
 			input_file.seekg(0, std::ios::beg);
 			sameEpoch = false;
+			if(char_cnn) {
+					fhc->reset_file();
+			}
 		}
 
 		//reset for GPU
@@ -465,39 +485,28 @@ struct file_helper {
 				if(h_input_vocab_indicies_source_temp[j + current_source_length*i]!=-1) {
 					STATS_source_len+=1;
 				}
-
 				h_input_vocab_indicies_source[i + j*minibatch_size] = h_input_vocab_indicies_source_temp[j + current_source_length*i];
 				h_output_vocab_indicies_source[i + j*minibatch_size] = h_output_vocab_indicies_source_temp[j + current_source_length*i];
 				if(h_input_vocab_indicies_source[i + j*minibatch_size]!=-1) {
 					words_in_minibatch+=1;
 				}
-				//std::cout << h_input_vocab_indicies_source[i + j*minibatch_size] << "   " << minibatch_tokens_source_input(i,j) << "\n";
-				//std::cout << h_output_vocab_indicies_source[i + j*minibatch_size] << "   " << minibatch_tokens_source_output(i,j) << "\n";
 			}
 			h_batch_info[i] = STATS_source_len;
 			h_batch_info[i+minibatch_size] = current_source_length - STATS_source_len;
 		}
 
-		// std::cout << "TESTING INPUT IN FILE HELPER\n";
-		// for(int i=0; i<2*minibatch_size; i++) {
-		// 	std::cout << h_batch_info[i] << " ";
-		// }
-		// std::cout << "\n\n";
 
 		//std::cout << "-------------------target input check--------------------\n";
 		for(int i=0; i<minibatch_size; i++) {
 			for(int j=0; j<current_target_length; j++) {
+				//std::cout << "i, j, current target length: " << i << " " << j << " " << current_target_length << "\n";
 				h_input_vocab_indicies_target[i + j*minibatch_size] = h_input_vocab_indicies_target_temp[j + current_target_length*i];
 				h_output_vocab_indicies_target[i + j*minibatch_size] = h_output_vocab_indicies_target_temp[j + current_target_length*i];
 				if(h_output_vocab_indicies_target[i + j*minibatch_size]!=-1) {
 					words_in_minibatch+=1;
 				}
-				//std::cout << h_input_vocab_indicies_target[i + j*minibatch_size] << "   " << minibatch_tokens_target_input(i,j) << "\n";
-				//std::cout << h_output_vocab_indicies_target[i + j*minibatch_size] << "   " << minibatch_tokens_target_output(i,j) << "\n";
 			}
 		}
-
-		//std::cout << "\n\n";
 
 		//Now preprocess the data on the host before sending it to the gpu
 		preprocess_input_Wgrad();

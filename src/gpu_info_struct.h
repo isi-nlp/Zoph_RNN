@@ -54,6 +54,8 @@ struct layer_gpu_info {
 	cudaEvent_t b_o_grad_done;
 	cudaEvent_t b_c_grad_done;
 
+	cudaEvent_t char_cnn_ready;
+
 	cudaEvent_t h_t_below_transfer; //transfer h_t to upper layer
 	cudaEvent_t dropout_done;
 
@@ -138,6 +140,8 @@ struct layer_gpu_info {
 		cudaEventCreate(&b_o_grad_done);
 		cudaEventCreate(&b_c_grad_done);
 
+		cudaEventCreate(&char_cnn_ready);
+
 		cudaEventCreate(&h_t_below_transfer);
 
 		cudaEventCreate(&b_c_grad_done);
@@ -145,6 +149,8 @@ struct layer_gpu_info {
 		cudaEventCreate(&dropout_done);
 
 		cudaEventCreate(&d_ERR_ht_done);
+
+		cudaEventCreate(&attention_forward);
 
 		cudaSetDevice(0);
 	}
@@ -178,6 +184,22 @@ struct softmax_layer_gpu_info {
 		cudaEventCreate(&d_b_d_grad_done);
 
 		cudaSetDevice(0);
+	}
+};
+
+
+struct bi_layer_info {
+
+	int device_number;
+	cublasHandle_t handle;
+	cudaStream_t s0;
+	std::vector<int> layer_indicies;
+
+	void init(int device_number) {
+		this->device_number = device_number;
+		cudaSetDevice(device_number);
+		CUBLAS_ERROR_WRAPPER(cublasCreate(&handle),"CUBLAS handler initialization failed\n");
+		cudaStreamCreate(&s0);
 	}
 };
 

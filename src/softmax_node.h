@@ -13,7 +13,9 @@ struct softmax_node {
 	int index;
 
 	softmax_node(int LSTM_size,int minibatch_size,int output_vocab_size,int index,bool dropout) {
-		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist, output_vocab_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
+		if(!BZ_CUDA::force_decode) {
+			CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist, output_vocab_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
+		}
 		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t, LSTM_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
 		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_d_ERRt_ht, LSTM_size*minibatch_size*sizeof(dType)),"GPU memory allocation failed\n");
 		this->index = index;

@@ -15,10 +15,13 @@ struct dec_global_obj {
 	int beam_index;
 	int vocab_index;
 
-	dec_global_obj(dType _val,int _beam_index,int _vocab_index) {
+	int viterbi_alignment;
+
+	dec_global_obj(dType _val,int _beam_index,int _vocab_index,int _viterbi_alignment) {
 		val = _val;
 		beam_index = _beam_index;
 		vocab_index = _vocab_index;
+		viterbi_alignment = _viterbi_alignment;
 	}
 };
 
@@ -27,9 +30,13 @@ struct dec_obj {
 
 	dType val;
 	int vocab_index;
-	dec_obj(dType _val,int _vocab_index) {
+
+	int viterbi_alignment;
+
+	dec_obj(dType _val,int _vocab_index,int _viterbi_alignment) {
 		val = _val;
 		vocab_index = _vocab_index;
+		viterbi_alignment = _viterbi_alignment;
 	}
 };
 
@@ -47,11 +54,13 @@ struct k_best {
 template<typename dType>
 struct eigen_mat_wrapper {
 	Eigen::Matrix<int, Eigen::Dynamic,1> hypothesis;
+	Eigen::Matrix<int, Eigen::Dynamic,1> viterbi_alignments;
 
 	dType score; //log prob score along with a penalty
 
 	eigen_mat_wrapper(int size) {
 		hypothesis.resize(size);
+		viterbi_alignments.resize(size);
 	}
 };
 
@@ -109,6 +118,10 @@ struct decoder {
 	Eigen::Matrix<int,Eigen::Dynamic, Eigen::Dynamic> top_sentences;
 	Eigen::Matrix<int,Eigen::Dynamic, Eigen::Dynamic> top_sentences_temp; //Temp to copy old ones into this
 
+	//size (beam size)x(max decoder length)
+	Eigen::Matrix<int,Eigen::Dynamic, Eigen::Dynamic> top_sentences_viterbi;
+	Eigen::Matrix<int,Eigen::Dynamic, Eigen::Dynamic> top_sentences_temp_viterbi; //Temp to copy old ones into this
+
 	//size (beam size)x1, score are stored as log probabilities
 	Eigen::Matrix<dType,Eigen::Dynamic, 1> top_sentences_scores;
 	Eigen::Matrix<dType,Eigen::Dynamic, 1> top_sentences_scores_temp;
@@ -132,13 +145,15 @@ struct decoder {
 		this->output_file_name = output_file_name;
 		this->num_hypotheses = num_hypotheses;
 		this->print_score = print_score;
-		std::cout << "OUTPUT FILE NAME FOR DECODER: " << output_file_name << "\n";
+		BZ_CUDA::logger << "Output file name for decoder: " << output_file_name << "\n";
 		output.open(output_file_name.c_str());
 
 		current_indices.resize(beam_size);
 		//top_words.resize(beam_size,beam_size);
 		top_sentences.resize(beam_size,max_decoding_length);
 		top_sentences_temp.resize(beam_size,max_decoding_length);
+		top_sentences_viterbi.resize(beam_size,max_decoding_length);
+		top_sentences_temp_viterbi.resize(beam_size,max_decoding_length);
 		top_sentences_scores.resize(beam_size);
 		top_sentences_scores_temp.resize(beam_size);
 		new_indicies_changes.resize(beam_size);
@@ -165,21 +180,36 @@ struct decoder {
 	}
 
 	template<typename Derived>
-	void finish_current_hypotheses(const Eigen::MatrixBase<Derived> &outputDist) {
+	void finish_current_hypotheses(const Eigen::MatrixBase<Derived> &outputDist,std::vector<int> &viterbi_alignments) {
 
 		for(int i=0; i<beam_size; i++) {
 			top_sentences(i,current_index+1) = end_symbol;
-			top_sentences_scores(i) += std::log(outputDist(0,i)) + penalty;
+			top_sentences_scores(i) += std::log(outputDist(1,i)) + penalty;
 			hypotheses.push_back(eigen_mat_wrapper<dType>(current_index+2));
 			hypotheses.back().hypothesis = top_sentences.block(i,0,1,current_index+2).transpose();//.row(temp.beam_index);
+			hypotheses.back().viterbi_alignments = top_sentences_viterbi.block(i,0,1,current_index+2).transpose();
+			hypotheses.back().viterbi_alignments(current_index+1) = viterbi_alignments[i];
 			hypotheses.back().score = top_sentences_scores(i);
 		}
 		current_index+=1;
 	}
 
 	template<typename Derived>
-	void expand_hypothesis(const Eigen::MatrixBase<Derived> &outputDist,int index) {
+	void expand_hypothesis(const Eigen::MatrixBase<Derived> &outputDist,int index,std::vector<int> &viterbi_alignments) {
 		
+
+		if(viterbi_alignments.size()!=0 && viterbi_alignments.size()!=beam_size) {
+			BZ_CUDA::logger << "VITERBI ALIGNMENT ERROR\n";
+			exit (EXIT_FAILURE);
+		}
+
+		if(viterbi_alignments.size()==0) {
+
+			for(int i=0; i<beam_size; i++) {
+				viterbi_alignments.push_back(-1);
+			}
+		}
+
 		int cols=outputDist.cols();
 		if(index==0) {
 			cols = 1;
@@ -190,12 +220,12 @@ struct decoder {
 			empty_queue_pq();
 			for(int j=0; j<outputDist.rows(); j++) {
 				if(pq.size() < beam_size + 1) {
-					pq.push( dec_obj<dType>(-outputDist(j,i),j) );
+					pq.push( dec_obj<dType>(-outputDist(j,i),j,viterbi_alignments[i]) );
 				}
 				else {
 					if(-outputDist(j,i) < pq.top().val) {
 						pq.pop();
-						pq.push( dec_obj<dType>(-outputDist(j,i),j) );
+						pq.push( dec_obj<dType>(-outputDist(j,i),j,viterbi_alignments[i]) );
 					}
 				}
 			}
@@ -204,7 +234,7 @@ struct decoder {
 				dec_obj<dType> temp = pq.top();
 				 pq.pop();
 				//pq_global.push( dec_global_obj<dType>(-temp.val,i,temp.vocab_index) );
-				pq_global.push( dec_global_obj<dType>(std::log(-temp.val) + top_sentences_scores(i),i,temp.vocab_index) );
+				pq_global.push( dec_global_obj<dType>(std::log(-temp.val) + top_sentences_scores(i),i,temp.vocab_index,temp.viterbi_alignment) );
 			}
 		}
 
@@ -220,12 +250,19 @@ struct decoder {
 					hypotheses.push_back(eigen_mat_wrapper<dType>(current_index+2));
 					hypotheses.back().hypothesis = top_sentences.block(temp.beam_index,0,1,current_index+2).transpose();//.row(temp.beam_index);
 					hypotheses.back().hypothesis(current_index+1) = end_symbol;
+
+					hypotheses.back().viterbi_alignments = top_sentences_viterbi.block(temp.beam_index,0,1,current_index+2).transpose();//.row(temp.beam_index);
+					hypotheses.back().viterbi_alignments(current_index+1) = temp.viterbi_alignment;
 					//hypotheses.back().score = std::log(temp.val) /*+ top_sentences_scores(temp.beam_index)*/ + penalty;
 					hypotheses.back().score = temp.val + penalty;
 				}
 				else {
 					top_sentences_temp.row(i) = top_sentences.row(temp.beam_index);
 					top_sentences_temp(i,current_index+1) = temp.vocab_index;
+
+					top_sentences_temp_viterbi.row(i) = top_sentences_viterbi.row(temp.beam_index);
+					top_sentences_temp_viterbi(i,current_index+1) = temp.viterbi_alignment;
+
 					current_indices(i) = temp.vocab_index;
 					new_indicies_changes(i) = temp.beam_index;
 					// if(top_sentences_scores(temp.beam_index)!=0) {
@@ -243,8 +280,15 @@ struct decoder {
 		}
 
 		top_sentences = top_sentences_temp;
+		top_sentences_viterbi = top_sentences_temp_viterbi;
 		top_sentences_scores = top_sentences_scores_temp;
 		current_index += 1;
+
+		// std::cout << "--------------- top sentences viterbi ---------------\n";
+		// for(int i=0; i<beam_size; i++) {
+		// 	std::cout << top_sentences_viterbi.row(i) << "\n\n\n\n\n\n";
+		// 	std::cout << top_sentences.row(i) << "\n\n\n\n\n\n";
+		// }
 
 		for(int i=0; i<beam_size; i++) {
 			h_current_indices[i] = current_indices(i);
@@ -266,6 +310,7 @@ struct decoder {
 		for(int i=0; i<beam_size; i++) {
 			for(int j=0; j<max_decoding_length; j++) {
 				top_sentences(i,j) = start_symbol;
+				top_sentences_viterbi(i,j) = -20;
 			}
 		}
 
@@ -280,21 +325,21 @@ struct decoder {
 		// }
 		// std::cout << "\n\n";
 
-		std::cout << "Printing out finished hypotheses" << std::endl;
-		std::cout << "Number of hyptheses: " << hypotheses.size() << std::endl;
+		BZ_CUDA::logger << "Printing out finished hypotheses" << "\n";
+		BZ_CUDA::logger << "Number of hyptheses: " << hypotheses.size() << "\n";
 		for(int i=0; i<hypotheses.size(); i++) {
-			std::cout << "Score of hypothesis " << hypotheses[i].score << "\n";
-			std::cout << hypotheses[i].hypothesis.transpose() << "\n\n\n";
+			BZ_CUDA::logger << "Score of hypothesis " << hypotheses[i].score << "\n";
+			BZ_CUDA::logger << hypotheses[i].hypothesis.transpose() << "\n\n\n";
 		}
 
-		std::cout << "Printing out in-progress hypotheses: " << std::endl;
+		BZ_CUDA::logger << "Printing out in-progress hypotheses: " << "\n";
 		for(int i=0; i<top_sentences.rows();i++) {
 			for(int j=0; j <= current_index; j++) {
-				std::cout << top_sentences(i,j) << " ";
+				BZ_CUDA::logger << top_sentences(i,j) << " ";
 			}
-			std::cout << "\n";
+			BZ_CUDA::logger << "\n";
 		}
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 
 		// std::cout << "Printing out beam changes\n";
 		// std::cout << new_indicies_changes << "\n\n";
@@ -306,8 +351,8 @@ struct decoder {
 		std::priority_queue<k_best<dType>,std::vector<k_best<dType>>, k_best_compare_functor> best_hypoth;
 
 		//dType max_val = -DBL_MAX;
-		dType max_val = -FLT_MAX;
-		int max_index = -1;
+		//dType max_val = -FLT_MAX;
+		//int max_index = -1;
 		dType len_ratio;
 		for(int i=0; i<hypotheses.size(); i++) {
 			len_ratio = ((dType)hypotheses[i].hypothesis.size())/source_length;
@@ -340,6 +385,16 @@ struct decoder {
 				output << hypotheses[best_hypoth_temp.top().index].hypothesis(j) << " ";
 			}
 			output << "\n";
+
+			if(BZ_CUDA::unk_replacement) {
+				for(int j=0; j<hypotheses[best_hypoth_temp.top().index].hypothesis.size(); j++) {
+					if(hypotheses[best_hypoth_temp.top().index].hypothesis(j) == 2) {
+						BZ_CUDA::unk_rep_file_stream << hypotheses[best_hypoth_temp.top().index].viterbi_alignments(j+1) << " ";
+					}
+				}
+				BZ_CUDA::unk_rep_file_stream << "\n";
+				BZ_CUDA::unk_rep_file_stream.flush();
+			}
 			best_hypoth_temp.pop();
 		}
 		output << "\n";

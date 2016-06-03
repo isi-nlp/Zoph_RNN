@@ -25,9 +25,74 @@
 //This is used since all cuBLAS storage is column major
 #define IDX2C(i,j,ld) (((j)*(ld))+(i))
 
+//std::ofstream HPC_output;
+
+
+namespace deniz {
+	bool source_side = false;
+	bool train_source_input_embedding = true;
+	bool train_target_input_embedding = true;
+	bool train_target_output_embedding = true;
+	bool train_source_RNN = true;
+	bool train_target_RNN = true;
+	bool train_attention_target_RNN = true;
+
+	bool soft_regularizer = false;
+	precision train_source_input_embedding_lambda = 0;
+	precision train_target_input_embedding_lambda = 0;
+	precision train_target_output_embedding_lambda = 0;
+	precision train_source_RNN_lambda = 0;
+	precision train_target_RNN_lambda = 0;
+	precision train_attention_target_RNN_lambda = 0;
+}
+
+
+
+//for t-sne stuff for paper
+namespace BZ_STATS {
+	precision *h_dump_ht = NULL;
+	bool tsne_dump = false;
+	std::ofstream tsne_dump_stream;//("tsne_dump_COMB.txt");
+}
 
 //namespace to hold constants
 namespace BZ_CUDA {
+
+//for logging the output
+//bool HPC_output = false;
+OutputLogger logger;
+
+bool cont_train = false;
+bool shuffle_data=true;
+
+//for ensembling pre-normalization
+bool pre_norm = false;
+
+
+//for dumping the best model
+bool dump_every_best = false;
+int curr_dump_num = 1;
+
+
+//stuff for unk replacement using attention
+bool unk_replacement = false;
+std::string unk_rep_file_name;
+std::ofstream unk_rep_file_stream;
+std::vector<int> viterbi_alignments;
+std::vector<int> all_viterbi_alignments;
+std::vector<precision> alignment_scores; //for ensembling alignment values
+int *h_align_indicies;
+precision *h_alignment_values;
+
+bool print_norms = false;
+
+unsigned int curr_seed = 0;
+
+//for not storing extra stuff during testing
+bool force_decode = false;
+
+//FOR BAD NCE DUMP
+bool nce_legacy_dump = false;
 
 boost::random::mt19937 gen;
 double lower = -0.08;
@@ -44,9 +109,24 @@ precision cell_clip_threshold = 50;
 precision error_clip_threshold = 1000;
 
 
+//for stats on gradient norms
+double recent_sum = 0;
+
+
 //grad clipping
 bool individual_grad_clip = false;
 precision ind_norm_clip_thres = 0.1;
+
+//for gettings only NCE scores (used for reranking, etc ...)
+bool nce_score = false;
+
+//for NCE stats for paper
+bool dump_NCE_stats = false;
+std::string NCE_file_dump_name = "ASHISH_DUMP.txt";
+std::ofstream NCE_file_dump;//(NCE_file_dump_name.c_str());
+precision *h_h_t_storage;
+double *h_part_vals;
+double *d_part_vals;
 
 //partition function calculation for NCE
 bool print_partition_function = false;
@@ -68,9 +148,9 @@ void print_partition_stats() {
 
 	variance = variance/full_partition_vals.size();
 
-	std::cout << "\n-------------------NCE PARTITION STATS------------------\n";
-	std::cout << "Partition mean: " << mean << "\n";
-	std::cout << "Partition function standard deviation: " << std::sqrt(variance) << "\n\n\n";
+	BZ_CUDA::logger << "\n-------------------NCE PARTITION STATS------------------\n";
+	BZ_CUDA::logger << "Partition mean: " << mean << "\n";
+	BZ_CUDA::logger << "Partition function standard deviation: " << std::sqrt(variance) << "\n\n\n";
 
 	full_partition_vals.clear();
 }
@@ -79,6 +159,24 @@ void print_partition_stats() {
 } //BZ_CUDA namespace
 
 
+
+#define FatalError(s) {                                                \
+    std::stringstream _where, _message;                                \
+    _where << __FILE__ << ':' << __LINE__;                             \
+    _message << std::string(s) + "\n" << __FILE__ << ':' << __LINE__;\
+    std::cerr << _message.str() << "\nAborting...\n";                  \
+    cudaDeviceReset();                                                 \
+    exit(EXIT_FAILURE);                                                \
+}
+
+
+#define checkCUDNN(status) {                                           \
+    std::stringstream _error;                                          \
+    if (status != CUDNN_STATUS_SUCCESS) {                              \
+      _error << "CUDNN failure\nError: " << cudnnGetErrorString(status); \
+      FatalError(_error.str());                                        \
+    }                                                                  \
+}
 
 
 
@@ -95,9 +193,9 @@ void print_partition_stats() {
 void CUDA_ERROR_WRAPPER(cudaError_t cudaStat,std::string error_message) {
 
 	if ( cudaSuccess != cudaStat ) {
-		std::cout << "Error\n";
+		BZ_CUDA::logger << "Error\n";
 		fprintf(stderr,"GPUassert: %s\n", cudaGetErrorString(cudaStat));
-		std::cout << error_message << "\n";
+		BZ_CUDA::logger << error_message << "\n";
 		exit (EXIT_FAILURE);
 	}
 }
@@ -139,12 +237,12 @@ std::string cublasErrorString(cublasStatus_t error) {
 
 
 void CUBLAS_ERROR_WRAPPER(cublasStatus_t cudaStat,std::string error_message) {
-	if (cudaStat != cudaSuccess) {
-
+	//if (cudaStat != cudaSuccess) {
+      if (cudaStat != CUBLAS_STATUS_SUCCESS) {
 		std::string msg = cublasErrorString(cudaStat);
 
 		std::cout << error_message << std::endl;
-		std::cout << msg << "\n";
+		BZ_CUDA::logger << msg << "\n";
 
 		exit (EXIT_FAILURE);
 	}
@@ -154,8 +252,8 @@ void CUBLAS_ERROR_WRAPPER(cublasStatus_t cudaStat,std::string error_message) {
  void CUDA_GET_LAST_ERROR() {
 	cudaError_t code = cudaGetLastError();
 	if ( cudaSuccess != code ) {
-		std::cout << "Error in kernel\n";
-		std::cout << "NO MESSAGE\n";
+		BZ_CUDA::logger << "Error in kernel\n";
+		BZ_CUDA::logger << "NO MESSAGE\n";
 		fprintf(stderr,"GPUassert: %s\n", cudaGetErrorString(code));
 		exit (EXIT_FAILURE);
 	}
@@ -164,9 +262,9 @@ void CUBLAS_ERROR_WRAPPER(cublasStatus_t cudaStat,std::string error_message) {
  void CUDA_GET_LAST_ERROR(std::string msg) {
 	cudaError_t code = cudaGetLastError();
 	if ( cudaSuccess != code ) {
-		std::cout << "Error in kernel\n";
+		BZ_CUDA::logger << "Error in kernel\n";
 		fprintf(stderr,"GPUassert: %s\n", cudaGetErrorString(code));
-		std::cout << msg << "\n";
+		BZ_CUDA::logger << msg << "\n";
 		exit (EXIT_FAILURE);
 	}
 }
@@ -184,6 +282,18 @@ void initialize_Matrix(dType *h_matrix,int rows,int cols) {
 	for(int j=0; j<cols; j++) {
 		for(int i=0; i<rows; i++) {
 			h_matrix[IDX2C(i,j,rows)] =  (dType)distribution(BZ_CUDA::gen);
+		}
+	}
+}
+
+
+template<typename dType>
+void initialize_Matrix_GPU(dType *d_matrix,int rows,int cols) {
+	boost::uniform_real<> distribution(BZ_CUDA::lower,BZ_CUDA::upper);
+	thrust::device_ptr<dType> mat_ptr = thrust::device_pointer_cast(d_matrix);
+	for(int j=0; j<cols; j++) {
+		for(int i=0; i<rows; i++) {
+			mat_ptr[IDX2C(i,j,rows)] =  (dType)distribution(BZ_CUDA::gen);
 		}
 	}
 }
@@ -244,9 +354,7 @@ void full_matrix_setup(dType **h_matrix,dType **d_matrix,int rows,int cols) {
 	allocate_Matrix_GPU(d_matrix,rows,cols);
 	set_matrix_cuBLAS(*h_matrix,*d_matrix,rows,cols);
 
-	#ifndef CPU_DEBUG
 	free(*h_matrix);
-	#endif
 }
 
 
@@ -257,9 +365,7 @@ void full_matrix_setup_0(dType **h_matrix,dType **d_matrix,int rows,int cols) {
 	allocate_Matrix_GPU(d_matrix,rows,cols);
 	set_matrix_cuBLAS(*h_matrix,*d_matrix,rows,cols);
 
-	#ifndef CPU_DEBUG
 	free(*h_matrix);
-	#endif
 }
 
 
@@ -270,9 +376,8 @@ void full_vector_setup(dType **h_vector,dType **d_vector,int rows) {
 	allocate_Matrix_GPU(d_vector,rows,1);
 	set_vector_cuBLAS(*h_vector,*d_vector,rows);
 
-	#ifndef CPU_DEBUG
+
 	free(*h_vector);
-	#endif
 }
 
 template<typename dType>
@@ -282,9 +387,7 @@ void full_vector_setup_ones(dType **h_vector,dType **d_vector,int rows) {
 	allocate_Matrix_GPU(d_vector,rows,1);
 	set_vector_cuBLAS(*h_vector,*d_vector,rows);
 
-	#ifndef CPU_DEBUG
 	free(*h_vector);
-	#endif
 }
 
 void initialize_vector_vocab(int *h_vector,int rows,int vocab_size) {
@@ -307,9 +410,7 @@ void full_vector_setup_vocab(int **h_vector,int **d_vector,int rows,int vocab_si
 	allocate_Matrix_GPU(d_vector,rows,1);
 	set_vector_cuBLAS(*h_vector,*d_vector,rows);
 
-	#ifndef CPU_DEBUG
 	free(*h_vector);
-	#endif
 }
 
 void full_vector_setup_vocab_01(int **h_vector,int **d_vector,int rows) {
@@ -318,20 +419,18 @@ void full_vector_setup_vocab_01(int **h_vector,int **d_vector,int rows) {
 	allocate_Matrix_GPU(d_vector,rows,1);
 	set_vector_cuBLAS(*h_vector,*d_vector,rows);
 
-	#ifndef CPU_DEBUG
 	free(*h_vector);
-	#endif
 }
 
 template<typename dType>
 void print_matrix(dType *h_matrix,int rows,int cols) {
 	for(int i=0; i<rows; i++) {
 		for(int j=0; j<cols; j++) {
-			std::cout << h_matrix[IDX2C(i,j,rows)] << " ";
+			BZ_CUDA::logger << h_matrix[IDX2C(i,j,rows)] << " ";
 		}
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 	}
-	std::cout << "\n";
+	BZ_CUDA::logger << "\n";
 }
 
 
@@ -339,22 +438,22 @@ template<typename Derived>
 void print_eigen_matrix(const Eigen::MatrixBase<Derived> &h_mat) {
 	for(int i=0; i<h_mat.rows(); i++) {
 		for(int j=0; j<h_mat.cols(); j++) {
-			std::cout << h_mat(i,j) << " ";
+			BZ_CUDA::logger << h_mat(i,j) << " ";
 		}
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 	}
-	std::cout << "\n";
+	BZ_CUDA::logger << "\n";
 }
 
 template<typename dType>
 void print_thrust_matrix(thrust::host_vector<dType> &h_mat,int rows,int cols) {
 	for(int i=0; i<rows; i++) {
 		for(int j=0; j<cols; j++) {
-			std::cout << h_mat[IDX2C(i,j,rows)] << " ";
+			BZ_CUDA::logger << h_mat[IDX2C(i,j,rows)] << " ";
 		}
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 	}
-	std::cout << "\n";
+	BZ_CUDA::logger << "\n";
 }
 
 
@@ -394,10 +493,10 @@ bool eigen_check_thres(const Eigen::MatrixBase<Derived> &h_eigen_mat,dType *h_cu
 	}
 	
 	if(num_bad > 0) {
-		std::cout << "Total that could fail: " << h_eigen_mat.rows()*h_eigen_mat.cols() << "\n";
-		std::cout << "Number in eigen check that failed: " << num_bad << "\n";
-		std::cout << "Max fail: " << max_fail << "\n";
-		std::cout << "average fail: " << average_fail/num_bad << "\n";
+		BZ_CUDA::logger << "Total that could fail: " << h_eigen_mat.rows()*h_eigen_mat.cols() << "\n";
+		BZ_CUDA::logger << "Number in eigen check that failed: " << num_bad << "\n";
+		BZ_CUDA::logger << "Max fail: " << max_fail << "\n";
+		BZ_CUDA::logger << "average fail: " << average_fail/num_bad << "\n";
 		return false;
 	} 
 	return true;
@@ -432,18 +531,18 @@ void eigen_check_thrust_ptr(const Eigen::MatrixBase<Derived> &h_eigen_mat,dType 
 	}
 	
 	if(num_bad > 0) {
-		std::cout << "Operation: " << msg << " failed\n";
-		std::cout << "Total that could fail: " << h_eigen_mat.rows()*h_eigen_mat.cols() << "\n";
-		std::cout << "Number in eigen check that failed: " << num_bad << "\n";
-		std::cout << "Max fail: " << max_fail << "\n";
-		std::cout << "average fail: " << average_fail/num_bad << "\n";
+		BZ_CUDA::logger << "Operation: " << msg << " failed\n";
+		BZ_CUDA::logger << "Total that could fail: " << h_eigen_mat.rows()*h_eigen_mat.cols() << "\n";
+		BZ_CUDA::logger << "Number in eigen check that failed: " << num_bad << "\n";
+		BZ_CUDA::logger << "Max fail: " << max_fail << "\n";
+		BZ_CUDA::logger << "average fail: " << average_fail/num_bad << "\n";
 		for (auto it=myset.begin(); it!=myset.end(); ++it)
-    		std::cout << ' ' << *it;
-    	std::cout << "\n\n";
+    		BZ_CUDA::logger << ' ' << *it;
+    	BZ_CUDA::logger << "\n\n";
 
     	for (auto it=myset2.begin(); it!=myset2.end(); ++it)
-    		std::cout << ' ' << *it;
-    	std::cout << "\n\n";
+    		BZ_CUDA::logger << ' ' << *it;
+    	BZ_CUDA::logger << "\n\n";
     	//std::cout << h_eigen_mat << "\n\n\n\n";
   //   	for(int i=0; i<h_eigen_mat.rows(); i++) {
 		// 	for(int j=0; j<h_eigen_mat.cols(); j++) {
@@ -451,7 +550,7 @@ void eigen_check_thrust_ptr(const Eigen::MatrixBase<Derived> &h_eigen_mat,dType 
 		// 	}
 		// 	std::cout << "\n";
 		// }
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 		exit (EXIT_FAILURE);
 	} 
 	free(h_temp);
@@ -480,11 +579,11 @@ void check_GPU_GPU(dType *mat1,dType *mat2,dType threshold,int rows,int cols,std
 	}
 
 	if(num_bad > 0) {
-		std::cout << "Operation: " << msg << " failed\n";
-		std::cout << "Total that could fail: " << rows*cols << "\n";
-		std::cout << "Number in eigen check that failed: " << num_bad << "\n";
-		std::cout << "Max fail: " << max_fail << "\n";
-		std::cout << "average fail: " << average_fail/num_bad << "\n";
+		BZ_CUDA::logger << "Operation: " << msg << " failed\n";
+		BZ_CUDA::logger << "Total that could fail: " << rows*cols << "\n";
+		BZ_CUDA::logger << "Number in eigen check that failed: " << num_bad << "\n";
+		BZ_CUDA::logger << "Max fail: " << max_fail << "\n";
+		BZ_CUDA::logger << "average fail: " << average_fail/num_bad << "\n";
 		exit (EXIT_FAILURE);
 	} 
 }
@@ -542,11 +641,22 @@ void print_GPU_Matrix(dType *d_ptr,int rows,int cols) {
 	thrust::device_ptr<dType> debug_ptr = thrust::device_pointer_cast(d_ptr);
 	for(int i=0; i<rows; i++) {
 		for(int j=0; j<cols; j++) {
-			std::cout << debug_ptr[IDX2C(i,j,rows)] << " ";
+			BZ_CUDA::logger << debug_ptr[IDX2C(i,j,rows)] << " ";
 		}
-		std::cout << "\n";
+		BZ_CUDA::logger << "\n";
 	}
-	std::cout << "\n";
+	BZ_CUDA::logger << "\n";
+}
+
+template<typename dType>
+void check_mem_loc(dType *d_ptr,int rows,int cols) {
+	thrust::device_ptr<dType> debug_ptr = thrust::device_pointer_cast(d_ptr);
+	for(int i=0; i<rows; i++) {
+		for(int j=0; j<cols; j++) {
+			dType temp = debug_ptr[IDX2C(i,j,rows)];
+		}
+	}
+	CUDA_GET_LAST_ERROR("check_mem_loc");
 }
 
 
@@ -810,30 +920,46 @@ void get_cell_states(dType *d_ptr,int LSTM_size,int minibatch_size) {
 		}
 	}
 
-	std::cout << "CELL STATS\n";
-	std::cout << "Total cell states: " << LSTM_size*minibatch_size << "\n";
-	std::cout << "Num above 10: " << num_above_10 << "\n";
-	std::cout << "Num above 50: " << num_above_50 << "\n";
-	std::cout << "Num above 100: " << num_above_100 << "\n";
-	std::cout << "Num above 500: " << num_above_500 << "\n";
-	std::cout << "Num below -10: " << num_below_10 << "\n";
-	std::cout << "Num below -50: " << num_below_50 << "\n";
-	std::cout << "Num below -100: " << num_below_100 << "\n";
-	std::cout << "Num below -500: " << num_below_500 << "\n";
+	BZ_CUDA::logger << "CELL STATS\n";
+	BZ_CUDA::logger << "Total cell states: " << LSTM_size*minibatch_size << "\n";
+	BZ_CUDA::logger << "Num above 10: " << num_above_10 << "\n";
+	BZ_CUDA::logger << "Num above 50: " << num_above_50 << "\n";
+	BZ_CUDA::logger << "Num above 100: " << num_above_100 << "\n";
+	BZ_CUDA::logger << "Num above 500: " << num_above_500 << "\n";
+	BZ_CUDA::logger << "Num below -10: " << num_below_10 << "\n";
+	BZ_CUDA::logger << "Num below -50: " << num_below_50 << "\n";
+	BZ_CUDA::logger << "Num below -100: " << num_below_100 << "\n";
+	BZ_CUDA::logger << "Num below -500: " << num_below_500 << "\n";
+}
+
+namespace gpu_info {
+	std::vector<int> device_numbers;
 }
 
 
-void devSynchAll() {
-	int num_devices;
-	int origin_device;
-	cudaGetDevice(&origin_device);
-	cudaGetDeviceCount(&num_devices);
-	for(int i=0; i<num_devices; i++) {
-		cudaSetDevice(i);
-		cudaDeviceSynchronize();
-	}
-	cudaSetDevice(origin_device);
-}
+//void devSynchAll() {
+//	int origin_device;
+//	cudaGetDevice(&origin_device);
+//    std::cout << gpu_info::device_numbers.size() << "\n";
+//	for(int i=0; i<gpu_info::device_numbers.size(); i++) {
+//		cudaSetDevice(gpu_info::device_numbers[i]);
+//		cudaDeviceSynchronize();
+//	}
+//	cudaSetDevice(origin_device);
+//}
+
+
+ void devSynchAll() {
+ 	int num_devices;
+ 	int origin_device;
+ 	cudaGetDevice(&origin_device);
+ 	cudaGetDeviceCount(&num_devices);
+ 	for(int i=0; i<num_devices; i++) {
+ 		cudaSetDevice(i);
+ 		cudaDeviceSynchronize();
+ 	}
+ 	cudaSetDevice(origin_device);
+ }
 
 
 template<typename dType>
@@ -860,7 +986,7 @@ bool check_nan(dType *d_ptr,int rows,int cols) {
 	devSynchAll();
 
 	if(debug_ptr[0]) {
-		std::cout << "NAN check failed\n";
+		BZ_CUDA::logger << "NAN check failed\n";
 		return true;
 	}
 
@@ -877,6 +1003,85 @@ void zero_check(dType *d_mat, int size) {
 		assert(d_mat[i]==0);
 	}
 }
+
+
+template<typename dType>
+__global__
+void check_nonseg(dType *d_ptr,int rows,int cols) {
+
+	
+}
+
+void printIntroMessage(global_params &params) {
+
+	if(params.train) {
+		BZ_CUDA::logger << "\n\n------------------------Train Info------------------------\n";
+		BZ_CUDA::logger << "Minibatch Size: " << params.minibatch_size << "\n";
+		BZ_CUDA::logger << "Number of Epochs: " << params.num_epochs << "\n";
+		BZ_CUDA::logger << "Learning Rate: " << params.learning_rate << "\n";
+		if(params.clip_gradient) {
+			BZ_CUDA::logger << "Gradient Clipping Threshold per matrix (Norm Ball): " << params.norm_clip << "\n";
+		}
+		if(params.individual_grad_clip) {
+			BZ_CUDA::logger << "Gradient Clipping Threshold per element: " << params.ind_norm_clip_thres << "\n";
+		}
+		if(params.truncated_softmax) {
+			BZ_CUDA::logger << "-------------------Truncated softmax info----------------------\n";
+			BZ_CUDA::logger << "Shortlist Size: " << params.shortlist_size << "\n";
+			BZ_CUDA::logger << "Sampled Size: " << params.sampled_size << "\n";
+			BZ_CUDA::logger << "---------------------------------------------------------------\n\n";
+		}
+	}
+	BZ_CUDA::logger << "------------------------Model Info------------------------\n";
+	if(params.LM) {
+		BZ_CUDA::logger << "Sequence model\n";
+	}
+	else {
+		BZ_CUDA::logger << "Sequence to sequence model\n";
+	}
+	BZ_CUDA::logger << "Source Vocab Size: " << params.source_vocab_size << "\n";
+	BZ_CUDA::logger << "Target Vocab Size: " << params.target_vocab_size << "\n";
+	BZ_CUDA::logger << "Number of Hidden Units: " << params.LSTM_size << "\n";
+	BZ_CUDA::logger << "Number of Layers: " << params.num_layers << "\n";
+	if(params.attent_params.attention_model) {
+		BZ_CUDA::logger << "Attention model set as true\n";
+		BZ_CUDA::logger << "D = " << params.attent_params.D << "\n";
+		if(params.attent_params.feed_input) {
+			BZ_CUDA::logger << "Feed Input set as true\n";
+		}
+	}
+
+	if(params.unk_replace) {
+		BZ_CUDA::logger << "UNK replace is set to true\n";
+	}
+    if(params.NCE) {
+        BZ_CUDA::logger << "Using NCE objective\n";
+        BZ_CUDA::logger << "Number of noise samples for NCE: " << params.num_negative_samples << "\n";
+    }
+    else {
+        BZ_CUDA::logger << "Using MLE objective\n";
+    }
+
+	BZ_CUDA::logger << "---------------------------------------------------------------\n\n";
+	if(params.decode) {
+		BZ_CUDA::logger << "------------------------Decode Info------------------------\n";
+		BZ_CUDA::logger << "Beam size for kbest: " << params.beam_size << "\n";
+		BZ_CUDA::logger << "Number of paths for kbest: " << params.num_hypotheses << "\n";
+		BZ_CUDA::logger << "------------------------------------------------------------\n\n";
+	}
+	// if(stochastic_generation) {
+	// 	BZ_CUDA::logger << "------------------------Stoch Generation Info------------------------\n";
+	// 	BZ_CUDA::logger << "Number of tokens for stoch generation: " << sg_length << "\n";
+	// 	BZ_CUDA::logger << "Stoch generation temperature: " << temperature << "\n";
+	// 	BZ_CUDA::logger << "------------------------------------------------------------\n\n";
+	// }
+
+	//BZ_CUDA::logger << "Number of Lines in Training File: " << train_num_lines_in_file << "\n";
+	BZ_CUDA::logger << "\n\n";
+}
+
+
+
 
 
 

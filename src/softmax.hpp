@@ -45,11 +45,16 @@ void softmax_layer<dType>::init_softmax_layer_GPU(int output_vocab_size,int mini
 	full_matrix_setup(&h_b_d,&d_b_d,output_vocab_size,1);
 	full_matrix_setup(&h_d_ERRt_ht,&d_d_ERRt_ht,LSTM_size,minibatch_size);
 	full_vector_setup_ones(&h_ones,&d_ones,output_vocab_size);
-	full_matrix_setup(&h_D_grad,&d_D_grad,output_vocab_size,LSTM_size);
+	//saving space during decoding
+	if(!BZ_CUDA::force_decode) {
+		full_matrix_setup(&h_D_grad,&d_D_grad,output_vocab_size,LSTM_size);
+	}
 	full_matrix_setup_0(&h_output_vocab_indices,&d_output_vocab_indices,minibatch_size,longest_sent);
 	full_matrix_setup_0(&h_output_vocab_indices_01,&d_output_vocab_indices_01,minibatch_size,longest_sent);
 	full_matrix_setup_0(&h_output_vocab_indices_01_float,&d_output_vocab_indices_01_float,minibatch_size,longest_sent);
 	full_vector_setup(&h_b_d_grad,&d_b_d_grad,output_vocab_size);
+
+	//cudaMemset(d_b_d,0,output_vocab_size*sizeof(dType));
 
 	thrust_d_D_grad = thrust::device_pointer_cast(d_D_grad);
 	thrust_d_b_d_grad = thrust::device_pointer_cast(d_b_d_grad);
@@ -67,7 +72,8 @@ void softmax_layer<dType>::init_softmax_layer_GPU(int output_vocab_size,int mini
 
 	curandCreateGenerator(&rand_gen,CURAND_RNG_PSEUDO_DEFAULT);
 	boost::uniform_int<> unif_boost( 1, 1000000 );
-	curandSetPseudoRandomGeneratorSeed(rand_gen,unif_boost(BZ_CUDA::gen));
+	curandSetPseudoRandomGeneratorSeed(rand_gen,BZ_CUDA::curr_seed);
+	BZ_CUDA::curr_seed+=7;
 
 
 	for(int i=0; i<longest_sent; i++) {
@@ -76,7 +82,17 @@ void softmax_layer<dType>::init_softmax_layer_GPU(int output_vocab_size,int mini
 
 	//now start clearning matrices at the end of the minibatch instead of beginning
 	cudaSetDevice(s_layer_info.device_number);
-	clear_gradients();
+
+	if(!BZ_CUDA::force_decode) {
+		clear_gradients();
+	}
+
+	if(BZ_CUDA::dump_NCE_stats) {
+		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&BZ_CUDA::d_part_vals, minibatch_size*sizeof(double)),"GPU memory allocation failed\n");
+		BZ_CUDA::h_part_vals = (double *)malloc(minibatch_size*sizeof(double));
+		BZ_CUDA::h_h_t_storage = (dType *)malloc(LSTM_size*minibatch_size*sizeof(dType));
+	}
+
 
 	cudaSetDevice(0);
 }
@@ -147,7 +163,6 @@ void softmax_layer<dType>::clear_gradients_GPU() {
 	}
 	cudaDeviceSynchronize();
 
-	cudaSetDevice(0);
 }
 
 
@@ -169,7 +184,16 @@ void softmax_layer<dType>::calculate_global_norm() {
 	thrust::for_each(thrust_d_b_d_grad,thrust_d_b_d_grad + output_vocab_size*1,unary_op);
 
 	norm_clip_GPU_v2_p1(thrust_d_D_grad,d_D_grad,norm_clip,output_vocab_size*LSTM_size,d_temp_result,d_result);
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR SOFTMAX D -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
+
 	norm_clip_GPU_v2_p1(thrust_d_b_d_grad,d_b_d_grad,norm_clip,output_vocab_size*1,d_temp_result,d_result);
+	// if(BZ_CUDA::print_norms) {
+	// 	HPC_output << "----------------------- PRINTING GRAD NORM FOR SOFTMAX b_d -----------------------\n";
+	// 	HPC_output << BZ_CUDA::recent_sum << "\n";
+	// }
 
 	devSynchAll();
 }
@@ -186,7 +210,6 @@ void softmax_layer<dType>::update_global_params() {
 	norm_clip_GPU_v2_p2(thrust_d_D_grad,d_D_grad,norm_clip,output_vocab_size*LSTM_size,d_temp_result,d_result);
 	norm_clip_GPU_v2_p2(thrust_d_b_d_grad,d_b_d_grad,norm_clip,output_vocab_size*1,d_temp_result,d_result);
 	
-
 	cublasSetStream(s_layer_info.handle,s_layer_info.s0);
 	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, LSTM_size, &alpha, 
 		d_D_grad, output_vocab_size, &beta, d_D, output_vocab_size, d_D, output_vocab_size),"CUBLAS addition update parameter failed\n");
@@ -194,7 +217,7 @@ void softmax_layer<dType>::update_global_params() {
 	cublasSetStream(s_layer_info.handle,s_layer_info.s1);
 	CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, 1, &alpha, d_b_d_grad, output_vocab_size, &beta, 
 		d_b_d, output_vocab_size, d_b_d, output_vocab_size),"CUBLAS addition update parameter failed\n");
-	
+	//clip_weights_kernel<<<256,256,0,s_layer_info.s0>>>(d_D,output_vocab_size*LSTM_size);
 	devSynchAll();
 }
 
@@ -252,14 +275,20 @@ void softmax_layer<dType>::update_weights_GPU() {
 		CUDA_GET_LAST_ERROR();
 	}
 	else {
-		cublasSetStream(s_layer_info.handle,s_layer_info.s0);
-		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, LSTM_size, &alpha, 
-			d_D_grad, output_vocab_size, &beta, d_D, output_vocab_size, d_D, output_vocab_size),"CUBLAS addition update parameter failed\n");
-
-		cublasSetStream(s_layer_info.handle,s_layer_info.s1);
-		CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, 1, &alpha, d_b_d_grad, output_vocab_size, &beta, 
-			d_b_d, output_vocab_size, d_b_d, output_vocab_size),"CUBLAS addition update parameter failed\n");
+		if(deniz::train_target_output_embedding) {
+			cublasSetStream(s_layer_info.handle,s_layer_info.s0);
+			CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, LSTM_size, &alpha, 
+				d_D_grad, output_vocab_size, &beta, d_D, output_vocab_size, d_D, output_vocab_size),"CUBLAS addition update parameter failed\n");
+		
+			//clip_weights_kernel<<<256,256,0,s_layer_info.s0>>>(d_D,output_vocab_size*LSTM_size);
+			cublasSetStream(s_layer_info.handle,s_layer_info.s1);
+			CUBLAS_ERROR_WRAPPER(cublas_geam_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,output_vocab_size, 1, &alpha, d_b_d_grad, output_vocab_size, &beta, 
+				d_b_d, output_vocab_size, d_b_d, output_vocab_size),"CUBLAS addition update parameter failed\n");
+		}
 	}
+	
+
+	devSynchAll();
 
 }
 
@@ -298,7 +327,19 @@ void softmax_layer<dType>::load_weights_GPU(std::ifstream &input) {
 	//std::cout << "----------------------READING D----------------------\n";
 	cudaSetDevice(s_layer_info.device_number);
 
-	read_matrix_GPU(d_D,output_vocab_size,LSTM_size,input);
+	if(BZ_CUDA::nce_legacy_dump) {
+		read_matrix_GPU_T(d_D,output_vocab_size,LSTM_size,input);
+	}
+	else {
+		read_matrix_GPU(d_D,output_vocab_size,LSTM_size,input);
+	}
+
+	//std::cout << "PRINTING SOFTMAX EMBEDDING (0) and final\n";
+	thrust::device_ptr<dType> temp_ptr = thrust::device_pointer_cast(d_D);
+	//std::cout << temp_ptr[0] << "\n";
+	//std::cout << temp_ptr[LSTM_size*output_vocab_size-1] << "\n";
+
+
 	read_matrix_GPU(d_b_d,output_vocab_size,1,input);
 }
 
@@ -324,8 +365,6 @@ void softmax_layer<dType>::check_all_gradients_GPU(dType epsilon)
 	check_gradient_GPU(epsilon,d_b_d,d_b_d_grad,output_vocab_size,1);
 	cudaSetDevice(s_layer_info.device_number);
 
-
-	cudaSetDevice(0);
 }
 
 
@@ -481,7 +520,7 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	cublasSetStream(s_layer_info.handle,s_layer_info.s0);
 	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,
 	 output_vocab_size, minibatch_size, LSTM_size, &alpha, d_D, output_vocab_size,
-	  d_h_t, LSTM_size, &beta, d_outputdist, output_vocab_size),"get_distribution cuBLAS call failed\n");
+	  d_h_t, LSTM_size, &beta, d_outputdist, output_vocab_size),"get_distribution cuBLAS call failed 1\n");
 
 
 	//add the bias vector to the matrix
@@ -490,6 +529,17 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	dim3 kernel_dim(minibatch_size,num_block,1);
 	matrix_bias_kernel<<< kernel_dim,threads_per_block,0,s_layer_info.s0 >>>(output_vocab_size,d_outputdist,d_b_d,d_outputdist);
 	CUDA_GET_LAST_ERROR();
+
+	//this is for decoding
+	if(BZ_CUDA::pre_norm) {
+		devSynchAll();
+
+		//now exp all elements
+		thrust::for_each(thrust_d_outputdist.begin(),thrust_d_outputdist.end(),exp_functor_gpu());
+
+		cudaEventRecord(s_layer_info.outputdist_done,s_layer_info.s0);
+		return;
+	}
 
 	if(!scaled) {
 		cudaDeviceSynchronize();
@@ -511,16 +561,9 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	else {
 		//std::cout << "OVERFLOW KERNEL\n";
 
-		if(truncated_softmax) {
-			outputdist_truncated_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist, d_outputdist,output_vocab_size,
-				sample_correction,shortlist_size_plus);
-		}
-		else {
 			outputdist_overflow_prevention_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist, d_outputdist, output_vocab_size);
 			CUDA_GET_LAST_ERROR();
-		}
 	}
-
 	
 	if(train_perplexity) {
 		train_perplexity_kernel<<<1,1,0,s_layer_info.s0>>>(d_output_vocab_indices_single,d_output_vocab_indices_01_single,d_outputdist,
@@ -541,20 +584,21 @@ void softmax_layer<dType>::get_perplexity_GPU(dType *d_h_t,int index)
 {	
 
 	//for passing gradient checking with dropout
-	if(dropout && model->train && model->grad_check_flag) {
+	if(dropout && model->train && model->grad_check_flag && !model->attent_params.attention_model) {
 		dropout_kernel<<<256,256,0,s_layer_info.s0>>>(nodes[index].d_dropout_mask,dropout_rate,d_h_t,LSTM_size*minibatch_size);
 	}
 	//cudaSetDevice(s_layer_info.device_number);
 	//cudaStreamWaitEvent(s_layer_info.s0,model->ih_layer_info.htm1_done,0);
 	//cudaStreamWaitEvent(s_layer_info.s0,model->ih_layer_info.ctm1_done,0);
 	devSynchAll();
+
 	//multiply the D matrix with the hidden state matrix
 	dType alpha = 1;
 	dType beta = 0;
 	cublasSetStream(s_layer_info.handle,s_layer_info.s0);
 	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,
 	 output_vocab_size, minibatch_size, LSTM_size, &alpha, d_D, output_vocab_size,
-	  d_h_t, LSTM_size, &beta, d_outputdist, output_vocab_size),"get_distribution cuBLAS call failed\n");
+	  d_h_t, LSTM_size, &beta, d_outputdist, output_vocab_size),"get_distribution cuBLAS call failed 2\n");
 
 
 	//add the bias vector to the matrix
@@ -564,14 +608,34 @@ void softmax_layer<dType>::get_perplexity_GPU(dType *d_h_t,int index)
 	matrix_bias_kernel<<< kernel_dim,threads_per_block,0,s_layer_info.s0 >>>(output_vocab_size,d_outputdist,d_b_d,d_outputdist);
 	CUDA_GET_LAST_ERROR("perplexity bias");
 
-	//std::cout << "OVERFLOW KERNEL\n";
-	outputdist_perplexity_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist_perp, d_outputdist, output_vocab_size,false,NULL);
-	CUDA_GET_LAST_ERROR("Perplexity Kernel");
 
-	//cudaEventRecord(s_layer_info.outputdist_done,s_layer_info.s0);
+	if(BZ_CUDA::dump_NCE_stats) {
+
+		outputdist_perplexity_kernel_NCE<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist_perp, d_outputdist, output_vocab_size,true,BZ_CUDA::d_part_vals);
+		CUDA_GET_LAST_ERROR("Perplexity Kernel");
+
+		devSynchAll();
+		cudaMemcpy(BZ_CUDA::h_part_vals,BZ_CUDA::d_part_vals,minibatch_size*sizeof(double),cudaMemcpyDeviceToHost);
+		//cudaMemcpy(BZ_CUDA::h_h_t_storage,d_h_t,LSTM_size*minibatch_size*sizeof(dType),cudaMemcpyDeviceToHost);
+
+		thrust::device_ptr<int> thrust_d_indicies = thrust::device_pointer_cast(d_output_vocab_indices_single);
+
+		for(int i=0; i < minibatch_size; i++) {
+			BZ_CUDA::NCE_file_dump << thrust_d_indicies[i] << ",";
+			BZ_CUDA::NCE_file_dump << BZ_CUDA::h_part_vals[i];// << ",";
+			// for(int j=0; j<LSTM_size; j++) {
+			// 	BZ_CUDA::NCE_file_dump << BZ_CUDA::h_h_t_storage[IDX2C(j,i,LSTM_size)] << " ";
+			// }
+			BZ_CUDA::NCE_file_dump << "\n";
+		}
+	}
+	else {
+		//std::cout << "OVERFLOW KERNEL\n";
+		outputdist_perplexity_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist_perp, d_outputdist, output_vocab_size,false,NULL);
+		CUDA_GET_LAST_ERROR("Perplexity Kernel");
+	}
 
 	cudaDeviceSynchronize();
-
 }
 
 
@@ -582,6 +646,11 @@ void softmax_layer<dType>::get_perplexity_GPU(dType *d_h_t,int index)
 template<typename dType>
 void softmax_layer<dType>::get_h_t_gradient_GPU(int output_vocab_size,dType *d_D,dType *d_outputdist,dType *d_d_ERRt_ht,int index) 
 {
+
+
+	// std::cout << "starting softmax backprop devsynchall\n";
+	// devSynchAll();
+
 	cudaSetDevice(s_layer_info.device_number);
 
 	#ifdef REMOVE_STREAMS
@@ -643,6 +712,9 @@ void softmax_layer<dType>::get_h_t_gradient_GPU(int output_vocab_size,dType *d_D
 	}
 	cudaEventRecord(s_layer_info.d_ERR_ht_done,s_layer_info.s1);
 
+
+	// std::cout << "finishing softmax backprop devsynchall\n";
+	// devSynchAll();
 
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
@@ -737,30 +809,42 @@ void softmax_layer<dType>::compute_b_d_gradient_GPU(int output_vocab_size,dType 
 }
 
 
+
 template<typename dType>
 double softmax_layer<dType>::compute_loss_GPU(int index) {
 	cudaSetDevice(s_layer_info.device_number);
 
-	devSynchAll();
-	get_perplexity_GPU(nodes[index].d_h_t,index);
-	cudaSetDevice(s_layer_info.device_number);
-
-	devSynchAll();
 	double loss = 0;
+	devSynchAll();
+
+	if(BZ_CUDA::nce_score) {
+		if(minibatch_size!=1) {
+            BZ_CUDA::logger << "ERROR: minibatch size must be one for NCE rescoring" << "\n";
+			exit (EXIT_FAILURE);
+		}  
+		cudaSetDevice(s_layer_info.device_number);
+		//cudaMemset();
+		//get the dotproducts
+		nce_score_dot<<<minibatch_size,SOFTMAX_THREADS>>>(d_outputdist_perp,nodes[index].d_h_t,d_D,d_b_d,d_output_vocab_indices_single,LSTM_size,minibatch_size,output_vocab_size);
+		devSynchAll();
+	}
+	else {
+		get_perplexity_GPU(nodes[index].d_h_t,index);
+	}
+
+	cudaSetDevice(s_layer_info.device_number);
+	devSynchAll();
 	thrust::device_ptr<int> d_ptr = thrust::device_pointer_cast(d_output_vocab_indices_single);
 	thrust::device_ptr<int> d_ptr_01 = thrust::device_pointer_cast(d_output_vocab_indices_01_single);
 	thrust::device_ptr<double> d_ptr_sm = thrust::device_pointer_cast(d_outputdist_perp);
 	for(int i=0; i < minibatch_size; i++) {
 		if(d_ptr_01[i]==1) {
 			//loss+=std::log((double)d_ptr_sm[IDX2C(d_ptr[i],i,output_vocab_size)]);
-			loss+=d_ptr_sm[IDX2C(d_ptr[i],i,output_vocab_size)];
+			loss += d_ptr_sm[IDX2C(d_ptr[i],i,output_vocab_size)];
 		}
 	}
 	return loss;
 }
-
-
-
 
 
 
@@ -855,8 +939,7 @@ int softmax_layer<dType>::stoic_generation(dType *h_outputdist,dType *d_outputdi
 			return i;
 		}
 	}
-
-	cudaSetDevice(0);
+    return 0;	
 }
 
 template<typename dType>

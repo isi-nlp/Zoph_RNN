@@ -79,9 +79,6 @@ void LSTM_IH_Node<dType>::forward_prop_GPU() {
 	devSynchAll();
 	#endif
 
-
-	CUDA_GET_LAST_ERROR("DONT FAIL HERE");
-
 	cudaSetDevice(model->ih_layer_info.device_number);
 	//cudaDeviceSynchronize();
 	//cudaDeviceSynchronize();
@@ -93,7 +90,23 @@ void LSTM_IH_Node<dType>::forward_prop_GPU() {
 	int num_block = (LSTM_size+threads_per_block-1)/threads_per_block;
 	dim3 kernel(minibatch_size,num_block,1);
 	CUDA_GET_LAST_ERROR("PRE SPARSE");
-	sparse_lookup_kernel<<< kernel,threads_per_block,0,model->ih_layer_info.s0>>>(d_sparse_lookup,model->d_W,d_input_vocab_indices,minibatch_size,LSTM_size);
+
+	if(!model->char_cnn) {
+		sparse_lookup_kernel<<< kernel,threads_per_block,0,model->ih_layer_info.s0>>>(d_sparse_lookup,model->d_W,d_input_vocab_indices,minibatch_size,LSTM_size);
+	}
+	else {
+		cudaEventRecord(model->ih_layer_info.char_cnn_ready,model->ih_layer_info.s0);
+		model->char_cnn_layer->forward(index);
+		cudaSetDevice(model->ih_layer_info.device_number);
+		cudaStreamWaitEvent(model->ih_layer_info.s0,model->char_cnn_layer->forward_prop_done,0);
+		if(model->model->decode) {
+			devSynchAll();
+			cudaMemcpyAsync(d_sparse_lookup,model->char_cnn_layer->top_highway_layer->nodes[0]->d_z,LSTM_size*minibatch_size*sizeof(dType),cudaMemcpyDefault,model->ih_layer_info.s0);
+		}
+		else {
+			cudaMemcpyAsync(d_sparse_lookup,model->char_cnn_layer->top_highway_layer->nodes[index]->d_z,LSTM_size*minibatch_size*sizeof(dType),cudaMemcpyDefault,model->ih_layer_info.s0);
+		}
+	}
 	CUDA_GET_LAST_ERROR("SPARSE");
 
 	if(dropout && model->model->train) {
@@ -134,11 +147,9 @@ void LSTM_IH_Node<dType>::forward_prop_GPU() {
 		d_h_t_prev,LSTM_size,&beta,model->d_temp2,LSTM_size),"Forward prop i_t temp2 failed\n");
 
 	#ifdef REMOVE_STREAMS
-	devSynchAll();
+	devSynchAll(); 
 	CUDA_GET_LAST_ERROR("Check PPPP");
 	#endif
-
-
 
 	if(feed_input && index!=0) {
 
@@ -231,6 +242,7 @@ void LSTM_IH_Node<dType>::forward_prop_GPU() {
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
+
 
 	// cudaDeviceSynchronize();
 	// eigen_check_thrust_ptr(f_t,d_f_t,"f_t in forward prop",(dType)0.0001);
@@ -411,11 +423,30 @@ void LSTM_IH_Node<dType>::forward_prop_GPU() {
 template<typename dType>
 void LSTM_IH_Node<dType>::send_h_t_above() {
 
+
+	if(model->model->decode) {
+		index = 0;
+	}
+
 	//run forward prop for attention model
 	if(attention_model) {
 		cudaEventRecord(model->attent_layer->layer_info.start_forward,model->ih_layer_info.s0);
 		model->attent_layer->nodes[index].forward_prop();
 		cudaStreamWaitEvent(model->ih_layer_info.s0,model->attent_layer->layer_info.forward_prop_done,0);
+
+		//run the second attention model
+		if(multi_attention) {
+			cudaEventRecord(model->attent_layer_bi->layer_info.start_forward,model->ih_layer_info.s0);
+			model->attent_layer_bi->nodes[index].forward_prop();
+			cudaStreamWaitEvent(model->ih_layer_info.s0,model->attent_layer_bi->layer_info.forward_prop_done,0);
+		}
+
+		//now run it through the combiner layer
+		if(multi_attention) {
+			cudaEventRecord(model->att_comb_layer->start_forward,model->ih_layer_info.s0);
+			model->att_comb_layer->nodes[index]->forward();
+			cudaStreamWaitEvent(model->ih_layer_info.s0,model->att_comb_layer->forward_prop_done,0);
+		}
 	}
 
 	//send the finished h_t to the above layer
@@ -429,8 +460,19 @@ void LSTM_IH_Node<dType>::send_h_t_above() {
 					cudaMemcpyAsync(model->upper_layer.softmax->get_ht_ptr(index), d_h_t, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
 				}
 				else {
-					cudaMemcpyAsync(model->upper_layer.softmax->get_ht_ptr(index), model->attent_layer->nodes[index].d_final_temp_2,LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+					if(multi_attention) {
+						//std::cout << "HERE TRANS 1\n";
+						cudaMemcpyAsync(model->upper_layer.softmax->get_ht_ptr(index), model->att_comb_layer->nodes[index]->d_ht_final,LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+					}
+					else {
+						cudaMemcpyAsync(model->upper_layer.softmax->get_ht_ptr(index), model->attent_layer->nodes[index].d_final_temp_2,LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+					}
 				}
+			}
+
+			//the above check wont send anything in the bidirectional case, do this here
+			if(model->bi_dir) {
+				cudaMemcpyAsync(d_bi_dir_ht, d_h_t, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
 			}
 		}
 		else {
@@ -438,7 +480,12 @@ void LSTM_IH_Node<dType>::send_h_t_above() {
 				cudaMemcpyAsync(model->upper_layer.hidden_layer->nodes[index].d_h_t_below, d_h_t, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
 			}
 			else {
-				cudaMemcpyAsync(model->upper_layer.hidden_layer->nodes[index].d_h_t_below, model->attent_layer->nodes[index].d_final_temp_2, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+				if(multi_attention) {
+					cudaMemcpyAsync(model->upper_layer.hidden_layer->nodes[index].d_h_t_below, model->att_comb_layer->nodes[index]->d_ht_final, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+				}
+				else {
+					cudaMemcpyAsync(model->upper_layer.hidden_layer->nodes[index].d_h_t_below, model->attent_layer->nodes[index].d_final_temp_2, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s0);
+				}
 			}
 		}
 	}
@@ -492,11 +539,12 @@ void LSTM_IH_Node<dType>::attention_extra() {
 }
 
 template<typename dType>
-void LSTM_IH_Node<dType>::back_prop_GPU() {
+void LSTM_IH_Node<dType>::back_prop_GPU(int index) {
 
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
+
 
 	cudaSetDevice(model->ih_layer_info.device_number);
 
@@ -527,13 +575,40 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 	cudaStreamWaitEvent(model->ih_layer_info.s0,model->ih_layer_info.b_c_grad_done,0);
 
 
+
 	//now pass the error to the attention node if the attention model is in place
 	//deal with the feed input here
 	if(attention_model) {
+
+		//run back_prop for combiner
+		if(multi_attention) {
+			cudaEventRecord(model->att_comb_layer->start_backward,model->ih_layer_info.s0);
+			model->att_comb_layer->nodes[index]->backward();
+			cudaStreamWaitEvent(model->ih_layer_info.s0,model->att_comb_layer->backward_prop_done,0);
+		}
+
+		//run backprop for each attention layer
+		if(multi_attention) {
+			cudaEventRecord(model->attent_layer_bi->layer_info.start_backward,model->ih_layer_info.s0);
+			model->attent_layer_bi->nodes[index].back_prop();
+			cudaStreamWaitEvent(model->ih_layer_info.s0,model->attent_layer_bi->layer_info.backward_prop_done,0);
+		}
+
 		cudaEventRecord(model->attent_layer->layer_info.start_backward,model->ih_layer_info.s0);
 		model->attent_layer->nodes[index].back_prop();
 		cudaStreamWaitEvent(model->ih_layer_info.s0,model->attent_layer->layer_info.backward_prop_done,0);
+
+		//combine the errors before being use in the LSTM below
+		if(multi_attention) {
+			add_two_mats_into_third_kernel<<<256,256,0,model->ih_layer_info.s0>>>(model->att_comb_layer->nodes[index]->d_ERR_ht_top_loss,model->attent_layer->nodes[index].d_d_ERRt_ht_tild,model->attent_layer_bi->nodes[index].d_d_ERRt_ht_tild,LSTM_size*minibatch_size); 
+		}
 	}
+
+
+	// std::cout << "Printing error with respect to h_t in LSTM node:\n";
+	// devSynchAll();
+	// print_GPU_Matrix(d_d_ERRt_ht,LSTM_size,minibatch_size);
+
 
 	// if(model->upper_layer.upper_softmax && model->upper_layer.source_side) {
 	// 	d_d_ERRt_ht = d_zeros;
@@ -551,6 +626,14 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
+
+	if(model->nonrev_bi_dir) {
+		for(int i=0; i<minibatch_size; i++) {
+			if(model->model->bi_dir_source.final_index_hs[i]==index) {
+				add_to_errors<<<256,256,0,model->ih_layer_info.s0>>>(model->d_d_ERRnTOt_ht,model->model->bi_dir_source.d_hs_nonrev_error_horiz[0],LSTM_size,i);
+			}
+		}
+	}
 
 	//OPERATION
 	//d_ERRt_ct.transpose() = d_ERRnTOt_ht.transpose().array() * (o_t.array()*(1-(c_t).array().unaryExpr(tanh_sq_functor())));
@@ -571,9 +654,20 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 		&beta,model->d_d_ERRt_ct,LSTM_size,model->d_d_ERRnTOt_ct,LSTM_size),"backprop addition failed, d_ERRnTOt_ct \n");
 
 
+	//now potentially add in errors if using the bi-directional model
+	if(model->nonrev_bi_dir) {
+		for(int i=0; i<minibatch_size; i++) {
+			if(model->model->bi_dir_source.final_index_hs[i]==index) {
+				add_to_errors<<<256,256,0,model->ih_layer_info.s0>>>(model->d_d_ERRnTOt_ct,model->model->bi_dir_source.d_ct_nonrev_error_horiz[0],LSTM_size,i);
+			}
+		}
+	}
+	
+
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
+
 
 	//OPERATION
 	//zero out columns of d_ERRnTOt_ht and d_ERRnTOt_ct
@@ -633,6 +727,7 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
+
 
 	//OPERATION
 	//USING STREAM 5,6,7,8,9
@@ -700,6 +795,11 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 
 	cudaEventRecord(model->ih_layer_info.htm1_done_temp,model->ih_layer_info.s9);
 
+
+	// std::cout << "devSynchAll LSTM 1st layer backprop check 1\n";
+	// devSynchAll();
+
+
 	//OPERATION
 	//send error to the attention model
 	if(feed_input && index!=0) {
@@ -750,7 +850,6 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 		#endif
 
 
-
 		cudaStreamWaitEvent(model->ih_layer_info.s9,model->ih_layer_info.htm1_p1_done,0);
 		cudaStreamWaitEvent(model->ih_layer_info.s9,model->ih_layer_info.htm1_p2_done,0);
 		cudaStreamWaitEvent(model->ih_layer_info.s9,model->ih_layer_info.htm1_p3_done,0);
@@ -760,12 +859,12 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 
 
 		if(BZ_CUDA::clip_cell) {
-			clip_mat_kernel<<<std::min(256,(LSTM_size*minibatch_size + 256 - 1)/256),256,0,model->ih_layer_info.s9>>>(d_ERRnTOt_h_tild_cpy,BZ_CUDA::error_clip_threshold,LSTM_size*minibatch_size);
+			clip_mat_kernel<<<std::min(256,(LSTM_size*minibatch_size + 256 - 1)/256),256,0,model->ih_layer_info.s9>>>(d_ERRnTOt_h_tild,BZ_CUDA::error_clip_threshold,LSTM_size*minibatch_size);
 		}
 
 		cudaMemcpyAsync(d_ERRnTOt_h_tild_cpy,d_ERRnTOt_h_tild,LSTM_size*minibatch_size*sizeof(dType),cudaMemcpyDefault,model->ih_layer_info.s9);
 		cudaEventRecord(model->ih_layer_info.error_htild_below,model->ih_layer_info.s9);
-	
+		
 		// devSynchAll();
 		// std::cout << "PRINTING ERROR OF HTILD FROM LOWER LSTM: \n";
 		// print_GPU_Matrix(d_ERRnTOt_h_tild,LSTM_size,minibatch_size);
@@ -796,13 +895,6 @@ void LSTM_IH_Node<dType>::back_prop_GPU() {
 	devSynchAll();
 	#endif
 
-	#ifdef CPU_DEBUG
-	cudaDeviceSynchronize();
-	eigen_check_thrust_ptr(d_ERRnTOt_ctM1.transpose(),model->d_d_ERRnTOt_ctM1,"d_ERRnTOt_ctM1 in back prop",(dType)0.00000001);
-	eigen_check_thrust_ptr(d_ERRnTOt_ctM1.transpose(),model->d_d_ERRnTOt_ctM1,"d_ERRnTOt_ctM1 in back prop",(dType)0.00000001);
-	eigen_check_thrust_ptr(d_ERRnTOt_ctM1.transpose(),model->d_d_ERRnTOt_ctM1,"d_ERRnTOt_ctM1 in back prop",(dType)0.00000001);
-	eigen_check_thrust_ptr(d_ERRnTOt_htM1.transpose(),model->d_d_ERRnTOt_htM1,"d_ERRnTOt_htM1 in back prop",(dType)0.00000001);
-	#endif
 	//eigen_check_thrust_ptr(d_ERRnTOt_ctM1.transpose(),d_d_ERRnTOt_ctM1,"d_ERRnTOt_ctM1 in back prop",(dType)0.0001);
 
 	compute_gradients_GPU();
@@ -922,7 +1014,7 @@ void LSTM_IH_Node<dType>::compute_gradients_GPU() {
 	if(feed_input && index!=0) {
 		alpha = 1;
 		beta = 1;
-
+		//std::cout << "HERE in feed_input backprop\n";
 		#ifdef REMOVE_STREAMS_FEED_INPUT
 		devSynchAll();
 		#endif
@@ -1028,75 +1120,147 @@ void LSTM_IH_Node<dType>::compute_gradients_GPU() {
 	// 		}
 	// 	}
 	// }
-	alpha = 1;
-	beta = 0;
-	//cudaStreamWaitEvent(model->ih_layer_info.s23,model->ih_layer_info.W_grad_full_done,0);
-	cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s23);
-	cudaStreamWaitEvent(model->ih_layer_info.s23,model->ih_layer_info.err_it_done,0);
-	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
-		LSTM_size,&alpha,model->d_M_i,LSTM_size,model->d_d_ERRnTOt_it,LSTM_size,&beta,
-		model->d_temp5,LSTM_size),"cublas W gradient failed temp5\n");
-	cudaEventRecord(model->ih_layer_info.W_grad_p1_done,model->ih_layer_info.s23);
 
-	#ifdef REMOVE_STREAMS
-	devSynchAll();
-	#endif
+	if(!model->char_cnn) {
+		alpha = 1;
+		beta = 0;
+		//cudaStreamWaitEvent(model->ih_layer_info.s23,model->ih_layer_info.W_grad_full_done,0);
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s23);
+		cudaStreamWaitEvent(model->ih_layer_info.s23,model->ih_layer_info.err_it_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
+			LSTM_size,&alpha,model->d_M_i,LSTM_size,model->d_d_ERRnTOt_it,LSTM_size,&beta,
+			model->d_temp5,LSTM_size),"cublas W gradient failed temp5\n");
+		cudaEventRecord(model->ih_layer_info.W_grad_p1_done,model->ih_layer_info.s23);
 
-	//cudaStreamWaitEvent(model->ih_layer_info.s24,model->ih_layer_info.W_grad_full_done,0);
-	cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s24);
-	cudaStreamWaitEvent(model->ih_layer_info.s24,model->ih_layer_info.err_ft_done,0);
-	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
-		LSTM_size,&alpha,model->d_M_f,LSTM_size,model->d_d_ERRnTOt_ft,LSTM_size,&beta,
-		model->d_temp6,LSTM_size),"cublas W gradient failed temp6\n");
-	cudaEventRecord(model->ih_layer_info.W_grad_p2_done,model->ih_layer_info.s24);
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
 
-	#ifdef REMOVE_STREAMS
-	devSynchAll();
-	#endif
+		//cudaStreamWaitEvent(model->ih_layer_info.s24,model->ih_layer_info.W_grad_full_done,0);
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s24);
+		cudaStreamWaitEvent(model->ih_layer_info.s24,model->ih_layer_info.err_ft_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
+			LSTM_size,&alpha,model->d_M_f,LSTM_size,model->d_d_ERRnTOt_ft,LSTM_size,&beta,
+			model->d_temp6,LSTM_size),"cublas W gradient failed temp6\n");
+		cudaEventRecord(model->ih_layer_info.W_grad_p2_done,model->ih_layer_info.s24);
 
-	//cudaStreamWaitEvent(model->ih_layer_info.s25,model->ih_layer_info.W_grad_full_done,0);
-	cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s25);
-	cudaStreamWaitEvent(model->ih_layer_info.s25,model->ih_layer_info.err_ot_done,0);
-	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
-		LSTM_size,&alpha,model->d_M_o,LSTM_size,model->d_d_ERRnTOt_ot,LSTM_size,&beta,
-		model->d_temp7,LSTM_size),"cublas W gradient failed temp7\n");
-	cudaEventRecord(model->ih_layer_info.W_grad_p3_done,model->ih_layer_info.s25);
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
 
-	#ifdef REMOVE_STREAMS
-	devSynchAll();
-	#endif
+		//cudaStreamWaitEvent(model->ih_layer_info.s25,model->ih_layer_info.W_grad_full_done,0);
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s25);
+		cudaStreamWaitEvent(model->ih_layer_info.s25,model->ih_layer_info.err_ot_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
+			LSTM_size,&alpha,model->d_M_o,LSTM_size,model->d_d_ERRnTOt_ot,LSTM_size,&beta,
+			model->d_temp7,LSTM_size),"cublas W gradient failed temp7\n");
+		cudaEventRecord(model->ih_layer_info.W_grad_p3_done,model->ih_layer_info.s25);
 
-	//cudaStreamWaitEvent(model->ih_layer_info.s26,model->ih_layer_info.W_grad_full_done,0);
-	cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s26);
-	cudaStreamWaitEvent(model->ih_layer_info.s26,model->ih_layer_info.err_tanhcpt_done,0);
-	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
-		LSTM_size,&alpha,model->d_M_c,LSTM_size,model->d_d_ERRnTOt_tanhcpt,LSTM_size,&beta,
-		model->d_temp8,LSTM_size),"cublas W gradient failed temp8\n");
-	cudaEventRecord(model->ih_layer_info.W_grad_p4_done,model->ih_layer_info.s26);
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
 
-	#ifdef REMOVE_STREAMS
-	devSynchAll();
-	#endif
+		//cudaStreamWaitEvent(model->ih_layer_info.s26,model->ih_layer_info.W_grad_full_done,0);
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s26);
+		cudaStreamWaitEvent(model->ih_layer_info.s26,model->ih_layer_info.err_tanhcpt_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,
+			LSTM_size,&alpha,model->d_M_c,LSTM_size,model->d_d_ERRnTOt_tanhcpt,LSTM_size,&beta,
+			model->d_temp8,LSTM_size),"cublas W gradient failed temp8\n");
+		cudaEventRecord(model->ih_layer_info.W_grad_p4_done,model->ih_layer_info.s26);
 
-	//cudaDeviceSynchronize();
-	//cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_full_done,0);
-	cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p1_done,0);
-	cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p2_done,0);
-	cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p3_done,0);
-	cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p4_done,0);
-	int threads_per_block = 128;
-	int num_block = (LSTM_size+threads_per_block-1)/threads_per_block;
-	dim3 kernel(minibatch_size,num_block,1);
-	if(!dropout) {
-		W_gradient_kernel<<<kernel,threads_per_block,0,model->ih_layer_info.s27>>>(model->d_W_grad,d_input_vocab_indices,model->d_temp5,
-			model->d_temp6,model->d_temp7,model->d_temp8,LSTM_size);
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
+
+		//cudaDeviceSynchronize();
+		//cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_full_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p1_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p2_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p3_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.W_grad_p4_done,0);
+		int threads_per_block = 128;
+		int num_block = (LSTM_size+threads_per_block-1)/threads_per_block;
+		dim3 kernel(minibatch_size,num_block,1);
+
+		if(!dropout) {
+			// W_gradient_kernel<<<kernel,threads_per_block,0,model->ih_layer_info.s27>>>(model->d_W_grad,d_input_vocab_indices,model->d_temp5,
+			// 	model->d_temp6,model->d_temp7,model->d_temp8,LSTM_size);
+
+			W_small_gradient_kernel<<<256,256,0,model->ih_layer_info.s27>>>(model->d_small_W_grad,model->d_reverse_unique_indicies,model->d_temp5,
+				model->d_temp6,model->d_temp7,model->d_temp8,d_input_vocab_indices,LSTM_size,minibatch_size);
+		}
+		else {
+			// W_gradient_kernel_dropout<<<kernel,threads_per_block,0,model->ih_layer_info.s27>>>(model->d_W_grad,d_input_vocab_indices,model->d_temp5,
+			// 	model->d_temp6,model->d_temp7,model->d_temp8,LSTM_size,d_dropout_mask,dropout_rate);
+
+			W_small_dropout_gradient_kernel<<<256,256,0,model->ih_layer_info.s27>>>(model->d_small_W_grad,model->d_reverse_unique_indicies,model->d_temp5,
+				model->d_temp6,model->d_temp7,model->d_temp8,d_input_vocab_indices,LSTM_size,minibatch_size,d_dropout_mask,dropout_rate);
+		}
+		CUDA_GET_LAST_ERROR("BP w_grad");
 	}
 	else {
-		W_gradient_kernel_dropout<<<kernel,threads_per_block,0,model->ih_layer_info.s27>>>(model->d_W_grad,d_input_vocab_indices,model->d_temp5,
-			model->d_temp6,model->d_temp7,model->d_temp8,LSTM_size,d_dropout_mask,dropout_rate);
+		dType alpha2 = 1;
+		dType beta2 = 0;
+
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s23);
+		cudaStreamWaitEvent(model->ih_layer_info.s23,model->ih_layer_info.err_ot_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,LSTM_size,
+			&alpha2,model->d_M_o,LSTM_size,model->d_d_ERRnTOt_ot,LSTM_size,&beta2,model->d_temp5,LSTM_size),"Error backprop temp1 htM1\n");
+		cudaEventRecord(model->ih_layer_info.htm1_p1_done,model->ih_layer_info.s3);
+
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
+
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s24);
+		cudaStreamWaitEvent(model->ih_layer_info.s24,model->ih_layer_info.err_ft_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,LSTM_size,
+			&alpha2,model->d_M_f,LSTM_size,model->d_d_ERRnTOt_ft,LSTM_size,&beta2,model->d_temp6,LSTM_size),"Error backprop temp2 htM1\n");
+		cudaEventRecord(model->ih_layer_info.htm1_p2_done,model->ih_layer_info.s24);
+
+
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
+
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s25);
+		cudaStreamWaitEvent(model->ih_layer_info.s25,model->ih_layer_info.err_it_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,LSTM_size,
+			&alpha2,model->d_M_i,LSTM_size,model->d_d_ERRnTOt_it,LSTM_size,&beta2,model->d_temp7,LSTM_size),"Error backprop temp3 htM1\n");
+		cudaEventRecord(model->ih_layer_info.htm1_p3_done,model->ih_layer_info.s25);
+
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
+
+		cublasSetStream(model->ih_layer_info.handle,model->ih_layer_info.s26);
+		cudaStreamWaitEvent(model->ih_layer_info.s26,model->ih_layer_info.err_tanhcpt_done,0);
+		CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(model->ih_layer_info.handle,CUBLAS_OP_T,CUBLAS_OP_N,LSTM_size,minibatch_size,LSTM_size,
+			&alpha2,model->d_M_c,LSTM_size,model->d_d_ERRnTOt_tanhcpt,LSTM_size,&beta2,model->d_temp8,LSTM_size),"Error backprop temp4 htM1\n");
+		cudaEventRecord(model->ih_layer_info.htm1_p4_done,model->ih_layer_info.s26);
+
+		#ifdef REMOVE_STREAMS
+		devSynchAll();
+		#endif
+
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.htm1_p1_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.htm1_p2_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.htm1_p3_done,0);
+		cudaStreamWaitEvent(model->ih_layer_info.s27,model->ih_layer_info.htm1_p4_done,0);
+		add_four_matrices_kernel_stride<<< 256,256,0,model->ih_layer_info.s27>>>(model->d_conv_char_error,model->d_temp5,model->d_temp6,model->d_temp7,model->d_temp8,LSTM_size*minibatch_size);
+		CUDA_GET_LAST_ERROR("BP htm1");
+
+		if(dropout) {
+			dropout_kernel<<<256,256,0,model->ih_layer_info.s27>>>(d_dropout_mask,model->dropout_rate,model->d_conv_char_error,LSTM_size*minibatch_size);
+		}
+
+		cudaMemcpyAsync(model->char_cnn_layer->top_highway_layer->nodes[index]->d_Err_z, model->d_conv_char_error, LSTM_size*minibatch_size*sizeof(dType), cudaMemcpyDefault,model->ih_layer_info.s27);
+		cudaEventRecord(model->char_cnn_layer->back_prop_start,model->ih_layer_info.s27);
+		model->char_cnn_layer->backward(index);
+
 	}
-	CUDA_GET_LAST_ERROR("BP w_grad");
 	cudaEventRecord(model->ih_layer_info.W_grad_full_done,model->ih_layer_info.s27);
+
 
 	#ifdef REMOVE_STREAMS
 	devSynchAll();

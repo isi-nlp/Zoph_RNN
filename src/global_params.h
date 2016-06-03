@@ -1,8 +1,6 @@
 //Global parameter file that needs to be specified for learning
 
 typedef float precision;
-//#define CPU_DEBUG //This is if you want to have the eigen code running
-#define GPU_MODE
 #define NDEBUG
 //#define REMOVE_STREAMS //this gets rid of all stream parallelism
 //#define NAN_DEBUG
@@ -10,12 +8,55 @@ typedef float precision;
 
 struct attention_params {
 	bool attention_model = false;
-	int D = 1;
+	int D = 10;
 	bool feed_input = false;
 	bool dump_alignments = false;
 	std::string tmp_alignment_file = "NULL";
 	std::string alignment_file = "alignments.txt";
 };
+
+struct bi_directional_params {
+	bool bi_dir = false;
+	bool bi_dir_comb = false;
+	bool share_embeddings = false;
+};
+
+struct multi_source_params {
+	bool multi_source = false;
+	bool multi_attention = false;
+	bool multi_attention_v2 = false;
+	bool add_ht = false; //add the hidden states instead of sending them through a neural network
+	bool lstm_combine = false;
+	std::string file_name = "NULL"; //this is for the training data for the additional file
+	std::string int_file_name = "/multi_source.txt";//the integerized file name in the booth path
+	std::string source_model_name = "NULL";//specified by user
+	std::string int_file_name_test = "/validation_multi.txt";
+	std::string test_file_name = "NULL";//specified by the user
+
+	std::string ensemble_train_file_name = "NULL";
+};
+
+struct char_cnn_params {
+
+	bool char_cnn = false;
+	int longest_word; //learn this from char mapping file
+	int filter_size;
+	int num_unique_chars_source; //learn this from char mapping file
+	int num_unique_chars_target; //learn this from char mapping file
+	int char_emb_size;
+
+	int num_highway_layers;
+
+	std::string char_mapping_file = "char_mapping.nn";
+	std::string word_mapping_file = "word_mapping.nn";
+	std::string char_train_file = "train_char.txt.brz";
+	std::string word_train_file = "train_word.txt.brz";
+	std::string char_dev_file = "dev_char.txt.brz";
+	std::string word_dev_file = "dev_word.txt.brz";
+	std::string char_test_file = "test_char.txt.brz";
+	std::string word_test_file = "test_word.txt.brz";
+};
+
 
 struct global_params {	
 
@@ -36,12 +77,16 @@ struct global_params {
 
 	//for dropout
 	bool dropout = false;
-	precision dropout_rate = 0.5; //probability of a node being kept
-
+	precision dropout_rate = 1.0; //probability of a node being kept
 
 	//for random seed
 	bool random_seed = false;
+	int random_seed_int = -1;
 
+	std::string tmp_location=""; //location where tmp directory will be created
+
+	//for charCNN
+	char_cnn_params char_params;
 
 	//for the attention model
 	attention_params attent_params;
@@ -64,7 +109,7 @@ struct global_params {
 	//nce
 	bool NCE = false;
 	int num_negative_samples = 500;
-
+	bool share_samples = true;
 
 
 	//UNK replace
@@ -72,11 +117,11 @@ struct global_params {
 	int unk_aligned_width = 7;
 
 
-	//options for treating input as one long sentence
-	bool carve_data = false;
-	int backprop_len = 20;
+	//bidirectional encoder
+	bi_directional_params bi_dir_params;
 
-
+	//multi source
+	multi_source_params multi_src_params;
 
 	//General settings
 	static const bool debug = false;
@@ -94,13 +139,13 @@ struct global_params {
 	double temperature=1;
 
 
-	bool HPC_output = true; //flushes the output to a file, so it can be read as the program executes
-	std::string HPC_output_file_name = "LOG_OUTPUT.txt";
+	bool HPC_output = false; //flushes the output to a file, so it can be read as the program executes
+	std::string HPC_output_file_name = "logfile.txt";
 
 	//Model training info
-	int minibatch_size = 128; //Size of the minibatch
+	int minibatch_size = 8; //Size of the minibatch
 	int num_epochs = 10; //Number passes through the dataset
-	precision learning_rate = 0.7; //The learning rate for SGD
+	precision learning_rate = 0.5; //The learning rate for SGD
 
 	//stuff for the google learning rate
 	//This halves the learning rate every 0.5 epochs after some inital epoch
@@ -139,7 +184,7 @@ struct global_params {
 	//vocab size of -1 defaults to the size of the train file specified
 	int source_vocab_size = -1;
 	int target_vocab_size = -1; //Size in input vocabulary, ranging from 0-input_vocab_size, where 0 is start symbol
-	int LSTM_size = 1000; //LSTM cell size, by definition it is the same as the word embedding layer
+	int LSTM_size = 100; //LSTM cell size, by definition it is the same as the word embedding layer
 	int num_layers = 1; //This is the number of stacked LSTM's in the model
 	std::vector<int> gpu_indicies;//for training with multiple gpu's
 
@@ -151,11 +196,18 @@ struct global_params {
 	precision min_decoding_ratio = 0.5; //target translation divided by source sentence length must be greater than min_decoding_ratio
 	precision max_decoding_ratio = 1.5;
 	bool print_score = false; //Whether to print the score of the hypotheses or not
-	std::string decode_tmp_file; //used for tmp stuff
-	std::string decode_file_name = "NULL";
-	std::string decoder_output_file = "NULL";
+	//std::string decode_tmp_file; //used for tmp stuff
+
+	std::vector<std::string> decode_user_files;//source file being decoded
+	std::vector<std::string> decode_user_files_additional;//source file being decoded
+	std::vector<std::string> decode_temp_files;//one for each model being decoded
+	std::vector<std::string> decode_temp_files_additional;//one for each model being decoded
+	std::string decoder_output_file = "NULL"; //decoder output in temp before integerization
 	std::vector<std::string> model_names; //for kbest ensembles
-	std::string decoder_final_file;
+	std::vector<std::string> model_names_multi_src;//NULL value represents not using one
+
+
+	std::string decoder_final_file; //what to output the final outputs to for decoding
 	int decode_num_lines_in_file = -1;//This is learned
 
 
@@ -198,67 +250,6 @@ struct global_params {
 	//For weights
 	std::string input_weight_file = "model.nn";
 	std::string output_weight_file = "model.nn";
-
-	void printIntroMessage() {
-
-		if(train) {
-			std::cout << "\n\n------------------------Train Info------------------------\n";
-			std::cout << "Minibatch Size: " << minibatch_size << std::endl;
-			std::cout << "Number of Epochs: " << num_epochs << std::endl;
-			std::cout << "Learning Rate: " << learning_rate << std::endl;
-			if(clip_gradient) {
-				std::cout << "Gradient Clipping Threshold per matrix (Norm Ball): " << norm_clip << std::endl;
-			}
-			if(individual_grad_clip) {
-				std::cout << "Gradient Clipping Threshold per element: " << ind_norm_clip_thres << std::endl;
-			}
-			if(truncated_softmax) {
-				std::cout << "-------------------Truncated softmax info----------------------\n";
-				std::cout << "Shortlist Size: " << shortlist_size << std::endl;
-				std::cout << "Sampled Size: " << sampled_size << std::endl;
-				std::cout << "---------------------------------------------------------------\n\n";
-			}
-		}
-		std::cout << "------------------------Model Info------------------------\n";
-		if(LM) {
-			std::cout << "Sequence model\n";
-		}
-		else {
-			std::cout << "Sequence to sequence model\n";
-		}
-		std::cout << "Source Vocab Size: " << source_vocab_size << std::endl;
-		std::cout << "Target Vocab Size: " << target_vocab_size << std::endl;
-		std::cout << "Number of Hidden Units: " << LSTM_size << std::endl;
-		std::cout << "Number of Layers: " << num_layers << std::endl;
-		if(attent_params.attention_model) {
-			std::cout << "Attention model set as true\n";
-			std::cout << "D = " << attent_params.D << "\n";
-			if(attent_params.feed_input) {
-				std::cout << "Feed Input set as true\n";
-			}
-		}
-
-		if(unk_replace) {
-			std::cout << "UNK replace is set to true\n";
-		}
-
-		std::cout << "---------------------------------------------------------------\n\n";
-		if(decode) {
-			std::cout << "------------------------Decode Info------------------------\n";
-			std::cout << "Beam size for kbest: " << beam_size << "\n";
-			std::cout << "Number of paths for kbest: " << num_hypotheses << "\n";
-			std::cout << "------------------------------------------------------------\n\n";
-		}
-		if(stochastic_generation) {
-			std::cout << "------------------------Stoch Generation Info------------------------\n";
-			std::cout << "Number of tokens for stoch generation: " << sg_length << "\n";
-			std::cout << "Stoch generation temperature: " << temperature << "\n";
-			std::cout << "------------------------------------------------------------\n\n";
-		}
-
-		//std::cout << "Number of Lines in Training File: " << train_num_lines_in_file << std::endl;
-		std::cout << "\n\n";
-	}
 
 };
 
