@@ -59,7 +59,7 @@ In the `sample_data` directory there is sample data provided that shows the prop
 
 
 ###Training a seq-to-seq model:
-Now lets step through an example that trains a basic sequence-to-sequence model. The following code will train a sequence-to-sequence model with the source training data `/path/to/source_train_data.txt` and the target training data `/path/to/target_train_data.txt`. These are placeholder names that will be replaced with your data files when you are training your own model. The resulting model will be saved to `model.nn`, but this can be named whatever the user wants. Training data always needs to consist of one training example per line, with tokens separated by spaces.
+Lets step through an example that trains a basic sequence-to-sequence model. The following code will train a sequence-to-sequence model with the source training data `/path/to/source_train_data.txt` and the target training data `/path/to/target_train_data.txt`. These are placeholder names that will be replaced with your data files when you are training your own model. The resulting model will be saved to `model.nn`, but this can be named whatever the user wants. Training data always needs to consist of one training example per line, with tokens separated by spaces.
 
 ```
 ./ZOPH_RNN -t /path/to/source_train_data.txt /path/to/target_train_data.txt model.nn
@@ -67,19 +67,19 @@ Now lets step through an example that trains a basic sequence-to-sequence model.
 
 By default the source sentences will always be fed in the reversed direction as in [Sequence to Sequence Learning with Neural Networks](http://arxiv.org/pdf/1409.3215.pdf). If you want to feed in the source sentences in the forward direction then simply preprocess your source data, so that it is in the reversed direction.
 
-Now there are many flags that can be used to train more specific architectures. Lets say we want to train a model with 3 layers (default is 1), 500 hiddenstates (default is 100), and a minibatch of size 64 (default is 8). The following command does this:
+There are many flags that can be used to train more specific architectures. Lets say we want to train a model with 3 layers (default is 1), 500 hiddenstates (default is 100), and a minibatch of size 64 (default is 8). The following command does this:
 
 ```
 ./ZOPH_RNN -t /path/to/source_train_data.txt /path/to/target_train_data.txt model.nn -N 3 -H 500 -m 64
 ```
 
-Now lets also make the model have 20,000 source vocabulary and 10,000 target vocabulary (by default the code makes the source vocabulary equal to the number of unique tokens in the source training data, and the target vocab does the same). Also lets apply dropout with a keep probability of 0.8 to the model, where dropout is applied as specified in [Recurrent Neural Network Regularization](http://arxiv.org/pdf/1409.2329.pdf). 
+Lets also make the model have 20,000 source vocabulary and 10,000 target vocabulary (by default the code makes the source vocabulary equal to the number of unique tokens in the source training data, and the target vocab does the same). Also lets apply dropout with a keep probability of 0.8 to the model, where dropout is applied as specified in [Recurrent Neural Network Regularization](http://arxiv.org/pdf/1409.2329.pdf). 
 
 ```
 ./ZOPH_RNN -t /path/to/source_train_data.txt /path/to/target_train_data.txt model.nn -N 3 -H 500 -m 64 --source-vocab-size 20000 --target-vocab-size 10000 -d 0.8
 ```
 
-Now lets change the learning rate to 0.5 (default is 0.7), add the local-p attention model with feed input as in [Effective Approaches to Attention-based Neural Machine Translation](http://stanford.edu/~lmthang/data/papers/emnlp15_attn.pdf).
+Additionally, lets change the learning rate to 0.5 (default is 0.7), add the local-p attention model with feed input as in [Effective Approaches to Attention-based Neural Machine Translation](http://stanford.edu/~lmthang/data/papers/emnlp15_attn.pdf).
 
 ```
 ./ZOPH_RNN -t /path/to/source_train_data.txt /path/to/target_train_data.txt model.nn -N 3 -H 500 -m 64 --source-vocab-size 20000 --target-vocab-size 10000 -d 0.8 -l 0.5 --attention-model true --feed-input true
@@ -151,7 +151,7 @@ This `--vocab-mapping-file` flag only needs to be specified during training. Thi
 
 
 ###Force-Decoding a seq-to-seq model
-Now once the model finished training we can use the model file (model.nn, best.nn or any of the models output from `--save-all-best` in the previous training example) for getting the perplexity for a set of source/target pairs or do beam decoding to get the best target outputs given some source sentences. Lets do the former first. We will specify the source and target data we want to get the perplexity for along with the per line log probabilities of each sentece. The output file we specify (`/path/to/output/perp_output.txt`) will contain the per line log probabilities and the total perplexity will be output to standard out. Additionally, we can use the `--logfile` flag as before if we also want standard out to be put to a file too and the `-L` flag to change what the longest sentence the code will accept.
+Once the model finished training we can use the model file (model.nn, best.nn or any of the models output from `--save-all-best` in the previous training example) for getting the perplexity for a set of source/target pairs or do beam decoding to get the best target outputs given some source sentences. Lets do the former first. We will specify the source and target data we want to get the perplexity for along with the per line log probabilities of each sentece. The output file we specify (`/path/to/output/perp_output.txt`) will contain the per line log probabilities and the total perplexity will be output to standard out. Additionally, we can use the `--logfile` flag as before if we also want standard out to be put to a file too and the `-L` flag to change what the longest sentence the code will accept.
 
 ```
 ./ZOPH_RNN -f /path/to/source_perp_data.txt /path/to/target_perp_data.txt model.nn /path/to/output/perp_output.txt --logfile /path/to/log/logfile.txt -L 500
@@ -161,7 +161,7 @@ If we trained the model using NCE then we can use the `--NCE-score` flag, which 
 
 
 ###Kbest Decoding for a seq-to-seq model
-Now lets have the model output the most likely target translation given the source using beam decoding. This can be done with the `--decode` (`-k`) flag. The `model.nn` file will be the trained neural network, `kbest.txt` is where we want the output to be put to and and `source_data.txt` is the file containing the source sentences that we want to be decoded. Once again short sentences are thrown out, so we can change that using the `-L` flag. 
+Lets have the model output the most likely target translation given the source using beam decoding. This can be done with the `--decode` (`-k`) flag. The `model.nn` file will be the trained neural network, `kbest.txt` is where we want the output to be put to and and `source_data.txt` is the file containing the source sentences that we want to be decoded. Once again short sentences are thrown out, so we can change that using the `-L` flag. 
 
 ```
 ./ZOPH_RNN -k 1 model.nn kbest.txt --decode-main-data-files /path/to/source_data.txt -L 500 
@@ -318,7 +318,7 @@ Next we will run the `scripts/unk_format.py` script to convert the output of the
 python scripts/unk_format.py kbest.txt kbest.txt.formatted
 ```
 
-Now we will run the final `scripts/att_unk_rep.py` script.
+Next we will run the final `scripts/att_unk_rep.py` script.
 
 ```
 python scripts/att_unk_rep.py /path/to/source_data.txt kbest.txt.formatted stage2.2.params.txt kbest.txt.formatted.unkrep
