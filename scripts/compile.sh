@@ -23,13 +23,14 @@ PATH_TO_EIGEN=${PATH_TO_EIGEN:-"/home/nlg-05/zoph/eigen/"}
 PATH_TO_CUDNN_INCLUDE=${PATH_TO_CUDNN_INCLUDE:-"/home/nlg-05/zoph/cudnn_v4/include/"}
 
 nvcc -DCUDNN_STATIC -O3 \
-     -g -Xcompiler -fopenmp \
-	 -I $PATH_TO_CUDA_INCLUDE \
+         -Xcompiler -fopenmp \
+         -I $PATH_TO_CUDA_INCLUDE \
 	 -I $PATH_TO_BOOST_INCLUDE  \
    	 ${PATH_TO_BOOST_LIB}libboost_system.a \
    	 -I $PATH_TO_CUDNN_INCLUDE \
    	 ${PATH_TO_BOOST_LIB}libboost_filesystem.a \
      ${PATH_TO_BOOST_LIB}libboost_program_options.a \
+     ${PATH_TO_BOOST_LIB}libboost_regex.a \
      -I $PATH_TO_EIGEN \
      -std=c++11 \
 	 ${PATH_TO_CUDA_LIB_64}libcublas_static.a \
@@ -43,5 +44,5 @@ nvcc -DCUDNN_STATIC -O3 \
 	 ${PATH_TO_CUDA_LIB_64}libnppi_static.a \
 	 ${PATH_TO_CUDA_LIB_64}libnpps_static.a \
      ${PATH_TO_CUDNN_V4_64}libcudnn_static.a \
-     src/main.cu -o ZOPH_RNN
+     src/main.cu src/format.cc -o ZOPH_RNN
 

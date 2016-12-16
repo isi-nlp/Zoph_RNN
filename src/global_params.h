@@ -251,6 +251,27 @@ struct global_params {
 	std::string input_weight_file = "model.nn";
 	std::string output_weight_file = "model.nn";
 
+    //For fsa
+    std::string fsa_file = "";
+    float fsa_weight = 0.0;
+    bool print_beam = false;
+    bool fsa_log = false;
+    bool interactive = false;
+    bool interactive_line = false;
+    precision repeat_penalty = 0;
+    precision adjacent_repeat_penalty = 0;
+    float wordlen_weight = 0;
+    float alliteration_weight = 0;
+
+    
+    // for encourage list
+    std::vector<std::string> encourage_list;
+    std::vector<float> encourage_weight;
+    std::string encourage_weight_str = "";
+    
+
+    
+    
 };
 
 

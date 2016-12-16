@@ -206,6 +206,11 @@ public:
 	void target_copy_prev_states(int LSTM_size, int beam_size);
 
 	void dump_alignments(int target_length,int minibatch_size,int *h_input_vocab_indicies_source,int *h_input_vocab_indicies_target,int *h_input_vocab_indicies_source_2);
+    
+    // for fsa line
+    void get_chts(std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>> &chts, int beam_index, int beam_size);
+    
+    void set_chts(const std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>>& chts, int beam_size);
 };
 
 #endif

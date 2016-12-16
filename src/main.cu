@@ -64,6 +64,8 @@
 #include "attention_combiner_node.hpp"
 #include "conv_char.hpp"
 #include "highway_network.hpp"
+#include "memory_util.h"
+
 
 //parse the command line from the user
 void command_line_parse(global_params &params,int argc, char **argv) {
@@ -213,7 +215,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   		("decode-multi-source-data-files",po::value<std::vector<std::string> > (&params.decode_user_files_additional)->multitoken(),"FORMAT: <multi-source data file 1> <multi-source data file 2> ... ")
   		("decode-multi-source-vocab-mappings",po::value<std::vector<std::string> > (&params.model_names_multi_src)->multitoken(),"FORMAT: <multi-source vocab mapping 1> <multi-source vocab mapping 2> ... ")
   		("pre-norm-ensemble",po::value<bool>(&BZ_CUDA::pre_norm),"For --decode, ensemble the models before they are normalized to probabilities")
-      ("beam-size,b",po::value<int>(&params.beam_size),"Set beam size for --decode paths\n DEFAULT: 12")
+        ("beam-size,b",po::value<int>(&params.beam_size),"Set beam size for --decode paths\n DEFAULT: 12")
   		("penalty,p",po::value<precision>(&params.penalty),"Set penalty for --decode decoding. The value entered"\
   			" will be added to the log probability score per target word decoded. This can make the model favor longer sentences for decoding\n DEFAULT: 0")
   		("print-score",po::value<bool>(&params.print_score),"Set if you want to print out the unnormalized log prob for each path when using --decode"\
@@ -221,7 +223,25 @@ void command_line_parse(global_params &params,int argc, char **argv) {
   		("dec-ratio",po::value<std::vector<precision>>(&decoding_ratio)->multitoken(),"Set the min and max decoding length rations when using --decode\n"\
   			"This means that a target decoded sentence must be at least min_dec_ratio*len(source sentence)"\
   			" and not longer than max_dec_ratio*len(source sentence)\nFORMAT: <min ration> <max ratio>\n"\
-  			"DEFAULT: 0.5, 1.5");
+  			"DEFAULT: 0.5, 1.5")
+        // for fsa
+        ("interactive",po::value<bool>(&params.interactive),"Interactive Mode. FORMAT: <bool> \n DEFAULT: false")
+        ("interactive-line",po::value<bool>(&params.interactive_line),"Interactive line by line Mode. FORMAT: <bool> \n DEFAULT: false")
+        ("print-beam",po::value<bool>(&params.print_beam),"Set if you want to print out the beam cells, mainly used for debug. FORMAT: <bool> \n DEFAULT: false")
+        ("repeat-penalty",po::value<precision>(&params.repeat_penalty),"Set penalty for kbest decoding. The value entered will be added to the log probability score per target word decoded. This can make the model favor sentences for less repeating words\n DEFAULT: 0")
+        ("adjacent-repeat-penalty",po::value<precision>(&params.adjacent_repeat_penalty),"Set penalty for kbest decoding. The value entered will be added to the log probability score per target word decoded. This will disencourage adjacent word copying.\n DEFAULT: 0")
+  		("fsa",po::value<std::string>(&params.fsa_file),"the fsa file for the decoder, should be in carmel format\nFORMAT: <fsa file name>")
+        ("fsa-weight",po::value<float>(&params.fsa_weight),"the fsa weight for the decoder, \nDEFAULT: 0.0")
+        ("fsa-log",po::value<bool>(&params.fsa_log),"Whether the probability in fsa file is in log space, DEFAULT: false\n")
+        ("encourage-list",po::value<std::vector<std::string>>(&params.encourage_list)->multitoken(),"provide encourage word list files for the decoding, each line should contain a encourage word \nFORMAT: <file1> <file2>")
+("encourage-weight",po::value<std::string>(&params.encourage_weight_str)->multitoken(),"The encourage weights. The weight is in log(e) space, and will be added to the corresponding word probability during decoding\nFORMAT: <weight1>,<weight2> e.g. 1.0,-0.5\n DEFAULT: ")
+("wordlen-weight",po::value<precision>(&params.wordlen_weight),"wordlen weight\n DEFAULT: 0")
+("alliteration-weight",po::value<precision>(&params.alliteration_weight),"alliteration weight\n DEFAULT: 0")
+    
+    
+    
+    
+        ;
     //   ("tsne-dump",po::value<bool>(&BZ_STATS::tsne_dump),"for dumping multi-source hiddenstates during decoding")
   		// ("Dump-LSTM",po::value<std::string>(&params.LSTM_dump_file),"Print the output at each timestep from the LSTM\nFORMAT: <output file name>\n"\
   		// 	"The file lines that are output are the following: 1.input word, embedding   2.Forget gate   3.input gate"\
@@ -1627,6 +1647,33 @@ int main(int argc, char **argv) {
 			params.penalty, params.longest_sent,params.print_score,
 			params.decoder_output_file,params.gpu_indicies,params.max_decoding_ratio,
 			params.target_vocab_size,params);
+        
+        if (params.fsa_file != ""){
+            fsa* fsa_model = new fsa(params.fsa_file);
+            input_file_prep input_helper;
+            input_helper.load_word_index_mapping(params.input_weight_file,false,true);
+            
+            ensemble_decode.model_decoder->init_fsa(fsa_model, input_helper.tgt_mapping, params);
+            // encourage list
+
+            params.encourage_weight.clear();
+            std::vector<std::string> ll = split(params.encourage_weight_str,',');
+            for (std::string s: ll){
+                float f = std::stof(s);
+                params.encourage_weight.push_back(f);
+            }
+
+            for (int i = 0; i< params.encourage_list.size(); i++){
+                std::string encourage_file = params.encourage_list[i];
+                float weight = params.encourage_weight[i];
+                if (i == 0){
+                    ensemble_decode.model_decoder->init_encourage_list(encourage_file, weight);
+                } else {
+                    ensemble_decode.model_decoder->init_encourage_list_additional(encourage_file, weight);
+                }
+            }
+
+        }
 
 		BZ_CUDA::logger << "-----------------Starting Decoding----------------\n";
 		ensemble_decode.decode_file();

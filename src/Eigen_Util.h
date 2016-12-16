@@ -355,6 +355,37 @@ void create_char_vocab(int *h_word_indicies,int num_words,int longest_word,int *
 	}
 }
 
+template<typename dType>
+Eigen::Matrix<dType,Eigen::Dynamic, 1> readCol_GPU2Eigen(dType *d_mat, dType *temp_mat, int col_index, int rows, int cols){
+    
+    CUDA_ERROR_WRAPPER(cudaMemcpy(temp_mat,d_mat,rows*cols*sizeof(dType),cudaMemcpyDeviceToHost),"readCol_GPU2Eigen");
+    
+    Eigen::Matrix<dType,Eigen::Dynamic, 1> mat;
+    mat.resize(rows,1);
+    
+    int start = col_index * rows;
+    for (int i = 0; i < rows; i ++){
+        mat(i,0) = temp_mat[start+i];
+    }
+    return mat;
+}
+
+template<typename dType>
+void writeColBroadcast_Eigen2GPU(dType *d_mat, const Eigen::Matrix<dType,Eigen::Dynamic, 1> &mat, int rows, int cols){
+    
+    dType *temp_mat = (dType *)malloc(rows*cols*sizeof(dType));
+
+    for (int col = 0; col < cols; col ++){
+        for (int row = 0; row < rows; row ++){
+            temp_mat[col*cols + row] = mat(row, 1);
+        }
+
+    }CUDA_ERROR_WRAPPER(cudaMemcpy(d_mat,temp_mat,rows*cols*sizeof(dType),cudaMemcpyHostToDevice),"writeColBroadcast_Eigen2GPU");
+
+    free(temp_mat);
+
+}
+
 
 
 #endif

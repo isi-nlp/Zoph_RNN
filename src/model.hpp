@@ -2709,6 +2709,56 @@ void neuralMT_model<dType>::swap_decoding_states(const Eigen::MatrixBase<Derived
 	// CUDA_GET_LAST_ERROR("SWAP DECODING STATES");
 }
 
+// for fsaline
+
+
+
+template<typename dType>
+void neuralMT_model<dType>::get_chts(std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>> &chts, int beam_index, int beam_size){
+    // ct[0], ht[0], ct[1], ht[1]
+    // should extract from c_t_prev / h_t_prev;
+
+
+    int LSTM_size = input_layer_target.LSTM_size;
+
+    dType * temp_mat = (dType *)malloc(LSTM_size*beam_size*sizeof(dType));
+    
+    Eigen::Matrix<dType,Eigen::Dynamic, 1> ct0 = readCol_GPU2Eigen(input_layer_target.nodes[0].d_c_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+
+    chts.push_back(ct0);
+
+    
+    Eigen::Matrix<dType,Eigen::Dynamic, 1> ht0 = readCol_GPU2Eigen(input_layer_target.nodes[0].d_h_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+    
+    
+    chts.push_back(ht0);
+
+    for (int i = 0 ; i < target_hidden_layers.size(); i++){
+        Eigen::Matrix<dType,Eigen::Dynamic, 1> ct = readCol_GPU2Eigen(target_hidden_layers[i].nodes[0].d_c_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+        Eigen::Matrix<dType,Eigen::Dynamic, 1> ht = readCol_GPU2Eigen(target_hidden_layers[i].nodes[0].d_h_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+        chts.push_back(ct);
+        chts.push_back(ht);
+    }
+    
+    free(temp_mat);
+    
+}
+
+template<typename dType>
+void neuralMT_model<dType>::set_chts(const std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>>& chts, int beam_size){
+    // ct[0], ht[0], ct[1], ht[1]
+    // should set to pre_state.pre_chts ? check this;
+    int LSTM_size = input_layer_target.LSTM_size;
+
+    writeColBroadcast_Eigen2GPU(previous_target_states[0].d_c_t_prev, chts[0], LSTM_size, beam_size);
+    writeColBroadcast_Eigen2GPU(previous_target_states[0].d_h_t_prev, chts[1], LSTM_size, beam_size);
+    
+    for (int i = 0 ; i < target_hidden_layers.size(); i++){
+        writeColBroadcast_Eigen2GPU(previous_target_states[i+1].d_c_t_prev, chts[2*i+2], LSTM_size, beam_size);
+        writeColBroadcast_Eigen2GPU(previous_target_states[i+1].d_h_t_prev, chts[2*i+3], LSTM_size, beam_size);
+    }
+}
+
 
 
 
