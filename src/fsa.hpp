@@ -13,7 +13,8 @@ state::state(const state& s)
     //this->links = s.links;
     this->weights = s.weights;
     this->empty_info = s.empty_info;
-   
+    this->next_word_index_set = s.next_word_index_set;
+    this->next_word_index_set_ready = s.next_word_index_set_ready;
 }
 
 
@@ -22,21 +23,22 @@ state::state(std::string name){
     this->name = name;
     //this->links = new std::unordered_map<std::string,std::unordered_set<state> >();
     //this->weights = new std::unordered_map<std::string,std::unordered_map<state,float> >();
-    this->weights = new std::unordered_map<int,std::unordered_map<state,float> >();
+    this->weights = new std::unordered_map<int,std::unordered_map<std::string, std::pair<state*,float> > >();
     this->empty_info = new std::vector<std::pair<int,int>>();
-    
+    this->next_word_index_set = new std::unordered_set<int>();
+    this->next_word_index_set_ready = false;
 }
 
-void state::process_link(state &d, int word, float weight, bool log_space, std::string info){
+void state::process_link(state* d, int word, float weight, bool log_space, std::string info){
     if (!log_space)
     {
         weight = std::log(weight);
     }
     if (weights->count(word) == 0){
-        (*weights)[word] = std::unordered_map<state,float>();
+        (*weights)[word] = std::unordered_map<std::string, std::pair<state*,float>>();
         
     }
-    (*weights)[word][d] = weight;
+    (*weights)[word][d->name] = std::pair<state*,float>(d,weight);
     if (word == -1 && info!=""){
         boost::regex re{"([0-9]+)_([0-9]+)"};
         boost::smatch sm;
@@ -57,9 +59,9 @@ std::string state::toString() const{
         
         s += "--"+ std::to_string(i.first)+"--> ";
         for (auto const &j:i.second){
-            state st = j.first;
-            float weight = j.second;
-            s += fmt::format("{} {}",st.name,weight);
+            state* st = j.second.first;
+            float weight = j.second.second;
+            s += fmt::format("{} {}",st->name,weight);
         }
         
         if (i.first == -1){
@@ -73,15 +75,34 @@ std::string state::toString() const{
     return s;
 }
 
-void state::next_word_indicies(std::unordered_set<int> &results) const{
-    for (const auto & item : *(this->weights)){
-        int index = item.first;
-        if (index == -1){ // word = *e*
-            for (const auto & state_item : item.second){
-                state_item.first.next_word_indicies(results);
+std::unordered_set<int>* state::next_word_indicies() {
+    if (this->next_word_index_set_ready){
+        return this->next_word_index_set;
+    } else {
+        for (auto & item : *(this->weights)){
+            int index = item.first;
+            if (index == -1){ // word = *e*
+                for (auto & state_item : item.second){
+                    //item.second is unordered_map<string, pair<state*,float> >;
+                    std::unordered_set<int>* temp_word_index_set = state_item.second.first->next_word_indicies();
+                    for (int index : *(temp_word_index_set))
+                    {
+                        this->next_word_index_set->insert(index);
+                    }
+                }
+            } else {
+                this->next_word_index_set->insert(index);
             }
         }
-        results.insert(index);
+        
+        this->h_dict = (int *)malloc(this->next_word_index_set->size()*1*sizeof(int));
+        int i = 0;
+        for (int index : *(this->next_word_index_set)){
+            this->h_dict[i] = index;
+            i+=1;
+        }
+        this->next_word_index_set_ready = true;
+        return this->next_word_index_set;
     }
 }
 
@@ -94,8 +115,8 @@ void state::next_states(std::vector<sw>& results, int word ){
     if (c > 0){
         for (auto const &s: this->weights->at(word)){
             sw temp_sw;
-            temp_sw.s = s.first;
-            temp_sw.weight = s.second;
+            temp_sw.s = s.second.first;
+            temp_sw.weight = s.second.second;
             results.push_back(temp_sw);
         }
     }
@@ -103,10 +124,10 @@ void state::next_states(std::vector<sw>& results, int word ){
     c = this->weights->count(empty);
     if (c > 0){
         for (auto const & s: this->weights->at(empty)){
-            float weight = s.second;
-            state st = s.first;
+            float weight = s.second.second;
+            state* st = s.second.first;
             std::vector<sw> sws;
-            st.next_states(sws, word);
+            st->next_states(sws, word);
             for (auto const & i:sws){
                 sw temp_sw;
                 temp_sw.s = i.s;
@@ -124,7 +145,7 @@ void fsa::print_fsa(){
     std::cout << "end_state: " << this->end_state->name<<"\n" ;
     std::cout << "\n";
     for (auto const & s: this->states){
-        std::cout << s.second.toString() <<'\n';
+        std::cout << s.second->toString() <<'\n';
     }
     
     std::cout << this->index2words[0] <<"\n";
@@ -132,9 +153,9 @@ void fsa::print_fsa(){
     std::cout << this->index2words[2] <<"\n";
     
     std::vector<sw> sws;
-    this->next_states(*(this->start_state),1,sws);
+    this->next_states(this->start_state,1,sws);
     for (auto const & s:sws){
-        std::cout << "have: " << s.s.name << "\n";
+        std::cout << "have: " << s.s->name << "\n";
     }
     
     
@@ -166,8 +187,8 @@ void fsa::load_fsa(){
     std::string line;
     // for the end_state;
     std::getline(fin, line);
-    states[line] = state(line);
-    end_state = &states[line];
+    states[line] = new state(line);
+    end_state = states[line];
     
     
     bool is_first_link = true;
@@ -224,15 +245,15 @@ void fsa::load_fsa(){
         //std::cout<<s<<" "<<d<<" "<<word<<" "<<weight<<"\n";
         
         if (states.count(s) == 0){
-            states[s] = state(s);
+            states[s] = new state(s);
         }
         if (states.count(d) == 0){
-            states[d] = state(d);
+            states[d] = new state(d);
         }
         
         if (is_first_link){
             // for start symbol;
-            this->start_state = &states[s];
+            this->start_state = states[s];
             is_first_link = false;
         }
         
@@ -247,7 +268,7 @@ void fsa::load_fsa(){
         }
         
         if (word_index != -2){
-            states[s].process_link(states[d],word_index,weight,this->log_space, info );
+            states[s]->process_link(states[d],word_index,weight,this->log_space, info );
             num_links += 1;
         }
         i+=1;
@@ -255,7 +276,7 @@ void fsa::load_fsa(){
     
     if (this->states.count("<EOF>") == 0)
     {
-        this->end_state->process_link(*(this->end_state),this->word2index["<EOF>"],default_weight, this->log_space);
+        this->end_state->process_link(this->end_state,this->word2index["<EOF>"],default_weight, this->log_space);
     }
     
     std::chrono::time_point<std::chrono::system_clock> total_end=std::chrono::system_clock::now();
@@ -281,9 +302,9 @@ void fsa::convert_name_to_index(std::unordered_map<std::string,int> &dict){
 }
 
 
-void fsa::next_states(state current_state,int index, std::vector<sw>& results){
+void fsa::next_states(state* current_state,int index, std::vector<sw>& results){
     if (this->index2words.count(index) > 0){
-        current_state.next_states(results, index);
+        current_state->next_states(results, index);
     }
 }
 

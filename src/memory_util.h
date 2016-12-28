@@ -79,4 +79,49 @@ std::vector<std::string> split(const std::string &s, char delim) {
     return elems;
 }
 
+
+class Timer {
+    
+    std::unordered_map<std::string,std::chrono::time_point<std::chrono::system_clock>> starts;
+    std::unordered_map<std::string,std::chrono::duration<double>> durations;
+
+public:
+  
+    void start(std::string key){
+        this->starts[key] = std::chrono::system_clock::now();
+    }
+    
+    
+    void end(std::string key){
+        std::chrono::duration<double> dur = std::chrono::duration<double>::zero();
+        dur = std::chrono::system_clock::now() - this->starts[key];
+        if (durations.count(key) == 0){
+            durations[key] = dur;
+        } else {
+            durations[key] += dur;
+        }
+    }
+    
+    void report(std::string key){
+        std::chrono::duration<double> dur = durations[key];
+        std::cout<<key<<" :"<<dur.count()<<" sec\n;";
+    }
+    
+    void report(){
+        for (auto const & i : durations ){
+            std::string key = i.first;
+            report(key);
+        }
+    }
+    
+    void clear(){
+        this->starts.clear();
+        this->durations.clear();
+    }
+    
+    
+    
+};
+
+
 #endif

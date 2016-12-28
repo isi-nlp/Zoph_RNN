@@ -2740,6 +2740,19 @@ void add_four_matrices_kernel_stride(dType *d_final,dType *d_mat1,dType *d_mat2,
 }
 
 
+// for decoder.h
+
+//
+template<typename dType>
+__global__
+void top_k(dType *probs, dType *results, int* dict, int dict_size) {
+    for(int index=threadIdx.x + blockIdx.x*blockDim.x; index<dict_size; index+=gridDim.x*blockDim.x) {
+        int prob_index = dict[index];
+        results[index] = log( probs[prob_index] );
+    }
+    
+}
+
 #endif
 
 

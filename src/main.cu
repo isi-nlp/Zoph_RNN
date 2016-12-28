@@ -1651,7 +1651,7 @@ int main(int argc, char **argv) {
         if (params.fsa_file != ""){
             fsa* fsa_model = new fsa(params.fsa_file);
             input_file_prep input_helper;
-            input_helper.load_word_index_mapping(params.input_weight_file,false,true);
+            input_helper.load_word_index_mapping(params.model_names[0],false,true);
             
             ensemble_decode.model_decoder->init_fsa(fsa_model, input_helper.tgt_mapping, params);
             // encourage list

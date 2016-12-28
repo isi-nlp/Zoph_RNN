@@ -21,15 +21,18 @@
 
 
 struct sw;
-struct swb;
 
 class state{
 public:
     std::string name;
     //std::unordered_map<std::string,std::unordered_set<state> > *links;
     //weights are all stored in log space; weights should be in (0,1]
-    std::unordered_map<int,std::unordered_map<state,float> > *weights;
-
+    std::unordered_map<int,std::unordered_map<std::string,std::pair<state*,float>>> *weights;
+    
+    // for next word indices;
+    std::unordered_set<int> *next_word_index_set;
+    int *h_dict;
+    bool next_word_index_set_ready;
     
     // specific for the empty info
     std::vector<std::pair<int,int>> *empty_info;
@@ -41,13 +44,13 @@ public:
 
     state(std::string name);
     
-    void process_link(state &d, int word, float weight, bool log_space, std::string info="");
+    void process_link(state *d, int word, float weight, bool log_space, std::string info="");
 
     std::string toString() const;
     
     void next_states(std::vector<sw>& results, int word);
     
-    void next_word_indicies(std::unordered_set<int> &results) const;
+    std::unordered_set<int>* next_word_indicies();
 
     bool operator==(const state &anotherState) const{
         return (name == anotherState.name);
@@ -55,25 +58,19 @@ public:
     
     state& operator=(const state &other){
         this->name = other.name;
-        //this->links = other.links;
         this->weights = other.weights;
         this->empty_info = other.empty_info;
+        this->next_word_index_set = other.next_word_index_set;
+        this->next_word_index_set_ready = other.next_word_index_set_ready;
         return *this;
     }
     
 };
 
 struct sw{
-    state s;
+    state* s;
     float weight;
 };
-
-struct swb{
-    state s;
-    float weight;
-    std::vector<boost::dynamic_bitset<>> masks;
-};
-
 
 
 namespace std{
@@ -85,12 +82,6 @@ namespace std{
         }
     };
     
-    template <typename B, typename A>
-    struct hash<boost::dynamic_bitset<B,A>>{
-        size_t operator()(const boost::dynamic_bitset<B,A>& bs) const{
-            return boost::hash_value(bs.m_bits);
-        }
-    };
 }
 
 class fsa {
@@ -99,7 +90,7 @@ public:
     std::string fsa_filename;
     state* start_state;
     state* end_state;
-    std::unordered_map<std::string,state> states;
+    std::unordered_map<std::string,state*> states;
     std::unordered_map<int,std::string> index2words;
     std::unordered_map<std::string,int> word2index;
     bool log_space = false;
@@ -110,10 +101,12 @@ public:
     
     ~fsa(){
         for (auto &item: states){
-            state &s = item.second;
-            delete s.weights;
-            delete s.empty_info;
-          
+            state *s = item.second;
+            delete s->weights;
+            delete s->empty_info;
+            delete s->next_word_index_set;
+            free(s->h_dict);
+            delete s;
         }
     }
     
@@ -122,7 +115,7 @@ public:
     void load_fsa();
     void convert_name_to_index(std::unordered_map<std::string,int> &dict);
     
-    void next_states(state current_state,int index, std::vector<sw>& results);
+    void next_states(state* current_state,int index, std::vector<sw>& results);
     
 };
 

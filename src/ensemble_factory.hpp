@@ -287,7 +287,7 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
         ensembles_models();
         
         //run decoder for this iteration
-        model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments);
+        model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
         //swap the decoding states
         for(int j=0; j<models.size(); j++) {
             // here the curr_index doesn't matter
@@ -458,6 +458,17 @@ template<typename dType>
 void ensemble_factory<dType>::decode_file_batch() {
 	
 	for(int i = 0; i < num_lines_in_file; i++) {
+        
+        //timing staff
+        std::chrono::time_point<std::chrono::system_clock> total_start, total_end, forward_start, forward_end, expand_start, expand_end;
+        
+        total_start= std::chrono::system_clock::now();
+        std::chrono::duration<double> total_dur, forward_dur, expand_dur;
+        
+        forward_dur = std::chrono::duration<double>::zero();
+        expand_dur = std::chrono::duration<double>::zero();
+
+        
 		BZ_CUDA::logger << "Decoding sentence: " << i << " out of " << num_lines_in_file << "\n";
 		//fileh->read_sentence(); //read sentence from file
 
@@ -487,19 +498,32 @@ void ensemble_factory<dType>::decode_file_batch() {
 		int source_length = std::max(models[0].source_length,models[0].source_length_bi);
 		for(int curr_index=0; curr_index < std::min( (int)(max_decoding_ratio*source_length) , longest_sent-2 ); curr_index++) {
 			
+            forward_start = std::chrono::system_clock::now();
+            
 			for(int j=0; j < models.size(); j++) {
 				models[j].forward_prop_target(curr_index,model_decoder->h_current_indices);
 				//now take the viterbi alignments
 			}
 
+            forward_end = std::chrono::system_clock::now();
+            forward_dur += forward_end - forward_start;
+
 			//now ensemble the models together
 			//this also does voting for unk-replacement
 		//	BZ_CUDA::logger << "Source length: " << source_length << "\n";
+            
+            
 			ensembles_models();
 
-			//run decoder for this iteration
-			model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments);
+            expand_start = std::chrono::system_clock::now();
 
+            
+			//run decoder for this iteration
+			model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
+
+            expand_end = std::chrono::system_clock::now();
+            expand_dur += expand_end - expand_start;
+            
 			//swap the decoding states
 			for(int j=0; j<models.size(); j++) {
 				models[j].swap_decoding_states(model_decoder->new_indicies_changes,curr_index);
@@ -519,6 +543,13 @@ void ensemble_factory<dType>::decode_file_batch() {
 		model_decoder->finish_current_hypotheses(outputdist,BZ_CUDA::viterbi_alignments);
 		model_decoder->output_k_best_hypotheses(source_length);
 		//model_decoder->print_current_hypotheses();
+        
+        total_end = std::chrono::system_clock::now();
+        total_dur = total_end - total_start;
+        std::cout<< "Total: " << total_dur.count()<<" s \n";
+        std::cout<< "Forward: " << forward_dur.count()<<" s \n";
+        std::cout<< "Expand: " << expand_dur.count()<<" s \n";
+
 	}
 
 }

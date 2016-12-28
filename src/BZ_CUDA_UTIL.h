@@ -1083,6 +1083,4 @@ void printIntroMessage(global_params &params) {
 
 
 
-
-
 #endif
