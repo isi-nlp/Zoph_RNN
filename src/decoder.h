@@ -276,10 +276,24 @@ struct decoder {
     // to save valid_vocab_size;
     int *d_valid_vocab_sizes;
     int *h_valid_vocab_sizes;
+    
     // to save top_sentence_score;
     dType *d_sentence_scores;
     dType *h_sentence_scores;
+    // to save wordlen
+    int *d_wordlen; //[vocab_size]
+    int *h_wordlen;
+    // to save alliteration information, same word would have save bin number;
+    int *d_vocab_bin; // [vocab_size]
+    int *h_vocab_bin;
     
+    // to save repeat informaiton;
+    int *d_sentence_set; // beam_size * max_decoding_length * 3 [vocab, beam_index, occur_times]
+    int *h_sentence_set;
+    
+    // to save encourange list
+    dType *h_encourage;
+    dType *d_encourage;
     
     
     std::vector<cudaStream_t> streams;
@@ -315,7 +329,7 @@ struct decoder {
 		new_indicies_changes.resize(beam_size);
         
 		h_current_indices = (int *)malloc(beam_size*1*sizeof(int));
-		//cudaMalloc((void**)&d_current_indices,beam_size*1*sizeof(int));//put void**
+		cudaMalloc((void**)&d_current_indices,beam_size*1*sizeof(int));//put void**
 
         // repeat_penalty
         if (repeat_penalty != 0.0){
@@ -334,9 +348,6 @@ struct decoder {
         // fsa
         this->fsa_model = NULL;
         
-        // for expand_pq_gpu
-        
-        std::cout<< "init_decoder\n";
         
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_dict, vocab_size*beam_size*1*sizeof(int)),"d_dict allocation failed\n");
         h_dict = (int *)malloc(vocab_size*beam_size*1*sizeof(int));
@@ -362,21 +373,40 @@ struct decoder {
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_sentence_scores, beam_size*sizeof(dType)),"d_sentence_scores in decoder allocation failed\n");
         h_sentence_scores = (dType *)malloc(beam_size*1*sizeof(dType));
         
-        
+        // d_outputdist
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist, beam_size*vocab_size*sizeof(dType)),"d_outputdist in decoder allocation failed\n");
 
+        // d_outputdist_topk
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_topk, vocab_size*beam_size*sizeof(dType)),"d_outputdist_topk in decoder allocation failed\n");
 
         h_outputdist_topk = (dType *)malloc(vocab_size*beam_size*1*sizeof(dType));
         //CUDA_ERROR_WRAPPER(cudaHostRegister(h_outputdist_topk, vocab_size * beam_size * sizeof(dType), cudaHostRegisterPortable),"h_outputdist_topk pinned memeory error!");
         
-         
-        // for cuda streams
-        for (int i=0; i < beam_size; i++){
+        // d_wordlen
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_wordlen, vocab_size*1*sizeof(int)),"d_wordlen allocation failed\n");
+        h_wordlen = (int *)malloc(vocab_size*1*sizeof(int));
+        
+        // d_vocab_bin
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_vocab_bin, vocab_size*1*sizeof(int)),"d_vocab_bin allocation failed\n");
+        h_vocab_bin = (int *)malloc(vocab_size*1*sizeof(int));
+        
+        // d_sentence_set
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_sentence_set, beam_size * max_decoding_length*3*sizeof(int)),"d_sentence_set allocation failed\n");
+        h_sentence_set = (int *)malloc(beam_size * max_decoding_length*3*sizeof(int));
+        
+        // d_encourage
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_encourage, vocab_size*1*sizeof(dType)),"d_encourage allocation failed\n");
+        h_encourage = (dType *)malloc(vocab_size*1*sizeof(dType));
+        
+        
+        // for cuda streams at least 10 beams;
+        for (int i=0; i < std::max(beam_size,10); i++){
             cudaStream_t stream;
             cudaStreamCreate(&stream);
             streams.push_back(stream);
         }
+        
+        
         
     }
     
@@ -405,16 +435,52 @@ struct decoder {
         free(h_sentence_scores);
         cudaFree(d_sentence_scores);
         
+        free(h_wordlen);
+        cudaFree(d_wordlen);
+        
+        free(h_vocab_bin);
+        cudaFree(d_vocab_bin);
+        
+        free(h_sentence_set);
+        cudaFree(d_sentence_set);
+        
+        free(h_encourage);
+        cudaFree(d_encourage);
+        
+        
         //for streams
-        for (int i=0; i < beam_size; i++){
+        for (int i=0; i < std::max(beam_size,10); i++){
             cudaStreamDestroy(streams[i]);
         }
 
         
     }
     // for encourage list
+    
+    void init_encourage_lists(std::vector<std::string> fns, std::vector<float> weights){
+        for (int i = 0; i< fns.size(); i++){
+            std::string encourage_file = fns[i];
+            float weight = weights[i];
+            if (i == 0){
+                this->init_encourage_list(encourage_file, weight);
+            } else {
+                this->init_encourage_list_additional(encourage_file, weight);
+            }
+        }
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_encourage, h_encourage,
+                                      vocab_size*sizeof(dType),
+                                      cudaMemcpyHostToDevice),
+                           " h_encourage to d_encourage\n");
+
+
+    }
+    
     void init_encourage_list(std::string fn, float weight){
         
+        for (int i = 0; i < vocab_size; i ++ ){
+            h_encourage[i] = 0.0;
+        }
         
         // should call after init_fsa();
         if (fn == ""){
@@ -443,6 +509,7 @@ struct decoder {
             }
             if (index != 2){
                 (*(this->encourage_list))[index] = weight;
+                h_encourage[index] = weight;
             }
         }
         fin.close();
@@ -466,6 +533,7 @@ struct decoder {
                 } else {
                     (*(this->encourage_list))[index] += weight;
                 }
+                h_encourage[index] += weight;
             }
             
         }
@@ -496,6 +564,34 @@ struct decoder {
         if (!params.interactive && !params.interactive_line){ // if it's interactive, this fsa_model is non_valid
             this->load_fsa_model();
         }
+        
+        std::unordered_map<std::string, int> bins;
+        int bin_index =0 ;
+        // prepare vocab_bin and wordlen
+        for (const auto & item : tgt_mapping){
+            std::string word = item.first;
+            std::string key = std::string(1,word[0]);
+            int vocab_index = item.second;
+            h_wordlen[vocab_index] = word.size();
+            if (bins.count(key) == 0){
+                bins[key] = bin_index;
+                bin_index += 1;
+            }
+            h_vocab_bin[vocab_index] = bins[key];
+        }
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_wordlen, h_wordlen,
+                                      vocab_size*sizeof(int),
+                                      cudaMemcpyHostToDevice),
+                           " h_wordlen to d_wordlen\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_vocab_bin, h_vocab_bin,
+                                      vocab_size*sizeof(int),
+                                      cudaMemcpyHostToDevice),
+                           " h_vocab_bin to d_vocab_bin\n");
+
+        
+        
     }
     
     void load_fsa_model()
@@ -662,32 +758,24 @@ struct decoder {
             }
         }
         
-        // copy h_outputdist to d_outputdist;
-        timer.start("h_outputdist_to_gpu");
-        CUDA_ERROR_WRAPPER(cudaMemcpy(d_outputdist, h_outputdist,
-                                      vocab_size*beam_size*sizeof(dType),
-                                      cudaMemcpyHostToDevice),
-                           "expand_hypothesis_with_fsa h_outputdist to d_outputdist\n");
-        timer.end("h_outputdist_to_gpu");
-        
-
         int cols=outputDist.cols();
-        if(index==0) {
-            cols = 1;
-        } else {
-            cols = 0;
-            for (int i = 0; i <beam_size; i++){
-                int symbol = this->current_indices(i);
-                if (symbol == this->invalid_symbol){
-                    break;
+        
+        if(false){
+            if(index==0) {
+                cols = 1;
+            } else {
+                cols = 0;
+                for (int i = 0; i <beam_size; i++){
+                    int symbol = this->current_indices(i);
+                    if (symbol == this->invalid_symbol){
+                        break;
+                    }
+                    cols += 1;
                 }
-                cols += 1;
             }
-        }
-        
-        std::cout<< "cols " << cols << "\n";
-        
-        if(true){
+            std::cout<< "cols " << cols << "\n";
+            
+            
             this->expand_pq_global_gpu(pqg,pqg_set, viterbi_alignments, cols);
             
             this->invalid_number = 0;
@@ -710,7 +798,11 @@ struct decoder {
             }
         }
         
-        if (false){
+        if (true){
+            
+            if(index==0) {
+                cols = 1;
+            }
             
             this->invalid_number = 0;
             empty_queue_global();
@@ -725,7 +817,7 @@ struct decoder {
                 }
                 
                 timer.start("expand_pq");
-                this->expand_pq_gpu(pq,pq_set,outputDist,i,viterbi_alignments);
+                this->expand_pq(pq,pq_set,outputDist,i,viterbi_alignments);
                 timer.end("expand_pq");
                 
                 timer.start("global_pq");
@@ -979,12 +1071,17 @@ struct decoder {
             cudaStreamSynchronize(streams[i]);
         }
         
-        // prepare valid_vocab_sizes;
-        CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
-                                      (beam_size+1)*sizeof(int),
-                                      cudaMemcpyHostToDevice),
-                           "expand_pq 1 h_valid_vocab_sizes to d_valid_vocab_sizes\n");
+        // prepare d_current_indices
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice),"expand_pq 1 h_current_indices to d_current_indices");
         
+        // prepare d_outputdist;
+        timer.start("h_outputdist_to_gpu");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_outputdist, h_outputdist,
+                                      vocab_size*beam_size*sizeof(dType),
+                                      cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_outputdist to d_outputdist\n");
+        timer.end("h_outputdist_to_gpu");
+
         // prepare top_sentence_scores;
         for (int i = 0; i < cols; i ++){
             h_sentence_scores[i] = top_sentences_scores(i);
@@ -993,9 +1090,40 @@ struct decoder {
                                       cols*sizeof(dType),
                                       cudaMemcpyHostToDevice),
                            "expand_pq 1 h_sentence_scores to d_sentence_scores\n");
+
+        
+        // add_features;
+        add_features<<<cols, 256>>>(d_outputdist, d_sentence_scores, d_encourage, d_current_indices, adjacent_repeat_penalty, d_wordlen, wordlen_weight, d_vocab_bin, alliteration_weight, beam_size, vocab_size);
+        
+        //prepare sentence_sets
+        int sentence_set_size = 0;
+        for (int i = 0; i < cols; i ++ ){
+            for (const auto & item : sentence_sets[i]){
+                int vocab_index = item.first;
+                int occur_times = item.second;
+                h_sentence_set[sentence_set_size * 3] = vocab_index;
+                h_sentence_set[sentence_set_size * 3+1] = i;
+                h_sentence_set[sentence_set_size * 3+2] = occur_times;
+                sentence_set_size += 1;
+            }
+        }
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_sentence_set, h_sentence_set,
+                                      sentence_set_size*3*sizeof(int),
+                                      cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_sentence_set to d_sentence_set\n");
+        
+        // add_feature_repeat;
+        add_feature_repeat<<<std::min(256,(sentence_set_size + 256 - 1)/256),256>>>(d_outputdist, d_sentence_set, repeat_penalty + interactive_repeat_penalty, sentence_set_size, vocab_size);
+        
+        
+        // prepare valid_vocab_sizes;
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
+                                      (beam_size+1)*sizeof(int),
+                                      cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_valid_vocab_sizes to d_valid_vocab_sizes\n");
         
         // log kernel;
-        top_k<<<cols,256>>>(d_outputdist, d_outputdist_topk, d_pointers, d_dict, d_beams, d_sentence_scores, d_valid_vocab_sizes, vocab_size);
+        top_k<<<cols,256>>>(d_outputdist, d_outputdist_topk, d_pointers, d_dict, d_beams, d_valid_vocab_sizes, vocab_size);
         
         thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + total_valid_size, d_pointers, thrust::greater<dType>());
         
@@ -1092,245 +1220,6 @@ struct decoder {
         
     }
     
-    
-    template<typename Derived>
-    void expand_pq_gpu(std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor>& pq,     std::unordered_set<dec_obj<dType>>& pq_set,
-                   const Eigen::MatrixBase<Derived> &outputDist, int beam_index, std::vector<int> &viterbi_alignments){
-        
-        // 0.18s || 0.12
-        empty_queue_pq(pq,pq_set);
-        
-        state* istate = this->current_states[beam_index];
-        
-        int nprune = 0;
-        int n = 0;
-        int nrows = outputDist.rows();
-        
-        
-        timer.start("next_word_indicies");
-        // ?s
-        std::unordered_set<int>* next_indicies = istate->next_word_indicies();
-        int valid_vocab_size = istate->next_word_index_set->size();
-        timer.end("next_word_indicies");
-        
-        timer.start("dict2array");
-        // ?s
-        //std::cout<< valid_vocab_size << " " << h_dict << " " << d_dict << "\n";
-
-        CUDA_ERROR_WRAPPER(cudaMemcpy(d_dict, istate->h_dict,
-                                      valid_vocab_size*sizeof(int),
-                                      cudaMemcpyHostToDevice),
-                           "expand_pq h_dict to d_dict\n");
-        
-        timer.end("dict2array");
-
-        timer.start("logkernel");
-        top_k<<<std::min(256,(valid_vocab_size + 256 - 1)/256),256>>>(d_outputdist+vocab_size*beam_index, d_outputdist_topk, d_dict, valid_vocab_size);
-        timer.end("logkernel");
-        
-        timer.start("gpusort");
-
-        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + valid_vocab_size, d_dict, thrust::greater<dType>());
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_dict, d_dict,
-                                      valid_vocab_size*sizeof(int),
-                                      cudaMemcpyDeviceToHost),
-                           "expand_pq d_dict to h_dict\n");
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist_topk, d_outputdist_topk,
-                                      valid_vocab_size*sizeof(int),
-                                      cudaMemcpyDeviceToHost),
-                           "expand_pq d_outputdist_topk to h_outputdist_topk\n");
-
-        timer.end("gpusort");
-        
-        timer.start("put");
-
-        for (int i = 0; i < valid_vocab_size; i ++ ){
-            int j = h_dict[i];
-            dType base_score = h_outputdist_topk[i];
-            
-            if (fsa_can_prune){
-                if (pq.size() >= beam_size){
-                    dType upper_bound = base_score;
-                    if ( - upper_bound > pq.top().val){
-                        nprune += 1;
-                        break;
-                    }
-                }
-            }
-
-            
-            timer.start("next_states");
-            //0.008s
-            std::vector<sw> sws;
-            this->fsa_model->next_states(istate,j,sws);
-            
-            timer.end("next_states");
-            
-            timer.start("sws_loop");
-            //0.01s
-            for (auto const & s:sws){
-                dType score = base_score;
-                dType fsa_score = 0.0;
-                fsa_score = this->fsa_weight * s.weight;
-                score += fsa_score;
-                
-                dec_obj<dType> dobj = dec_obj<dType>(-score,j, viterbi_alignments[beam_index] );
-                dobj.score = score;
-                dobj.s = s.s;
-                
-                if(pq.size() >= beam_size ) {
-                    pq.pop();
-                }
-                if (merge_state){
-                    // this is necessary for the following cases:
-                    // 1. (1 (2 *e* 0.5))
-                    // 2. (1 (3 a 0.5))
-                    // 3. (2 (3 a 0.5))
-                    
-                    if (pq_set.count(dobj) == 0){
-                        pq.push(dobj);
-                        pq_set.insert(dobj);
-                    }
-                }
-                else {
-                    pq.push( dobj );
-                }
-
-            }
-            timer.end("sws_loop");
-            
-        }
-        timer.end("put");
-
-        
-        if (false) { // old data;
-        for (auto const & j : *(next_indicies)){
-            if (j == -1 || j>= nrows) {continue;}
-            
-            dType base_score = std::log(outputDist(j,beam_index));
-            
-            if (false){  // style control
-                
-                timer.start("encourage");
-                if (encourage){
-                    if (this->encourage_list->count(j) > 0){
-                        base_score += (*(this->encourage_list))[j];
-                    }
-                }
-                timer.end("encourage");
-                
-                timer.start("penalize_repeat");
-                if (penalize_repeat){
-                    if ((sentence_sets[beam_index]).count(j) > 0){
-                        //BZ_CUDA::logger<<"Beam: "<<i<<" Repeat: "<<j<<" "<<base_score;
-                        base_score += sentence_sets[beam_index][j] * (repeat_penalty + interactive_repeat_penalty);
-                        //BZ_CUDA::logger<<" "<<base_score<<"\n";
-                    }
-                }
-                
-                timer.end("penalize_repeat");
-                timer.start("adjacent_repeat");
-                if (penalize_adjacent_repeat){
-                    if (this->current_indices(beam_index) == j){
-                        base_score += adjacent_repeat_penalty;
-                    }
-                }
-                timer.end("adjacent_repeat");
-                
-                
-                timer.start("lookup words");
-                std::string word_current = fsa_model->index2words[this->current_indices(beam_index)];
-                std::string word_next = fsa_model->index2words[j];
-                timer.end("lookup words");
-                
-                timer.start("alliteration_weighs");
-                
-                // alliteration_weight;
-                if (word_current[0] == word_next[0]){
-                    base_score += alliteration_weight;
-                }
-                timer.end("alliteration_weighs");
-                
-                timer.start("wordlen");
-                
-                // wordlen_weight;
-                base_score += wordlen_weight * word_next.size() * word_next.size();
-                timer.end("wordlen");
-                
-            } // sytle control
-            
-            n += 1;
-            if (fsa_can_prune){
-                if (pq.size() >= beam_size){
-                    dType upper_bound = base_score;
-                    if ( - upper_bound > pq.top().val){
-                        nprune += 1;
-                        continue;
-                    }
-                }
-            }
-            
-            
-            timer.start("next_states");
-            //0.008s
-            std::vector<sw> sws;
-            this->fsa_model->next_states(istate,j,sws);
-            
-            timer.end("next_states");
-            
-            timer.start("sws_loop");
-            //0.01s
-            for (auto const & s:sws){
-                dType score = base_score;
-                dType fsa_score = 0.0;
-                fsa_score = this->fsa_weight * s.weight;
-                score += fsa_score;
-                
-                
-                
-                if(pq.size() < beam_size ) {
-                    dec_obj<dType> dobj = dec_obj<dType>(-score,j, viterbi_alignments[beam_index] );
-                    dobj.score = score;
-                    dobj.s = s.s;
-                    
-                    if (merge_state){
-                        if (pq_set.count(dobj) == 0){
-                            pq.push(dobj);
-                            pq_set.insert(dobj);
-                        }
-                    }
-                    else {
-                        pq.push( dobj );
-                    }
-                }
-                else {
-                    if(-score < pq.top().val) {
-                        pq.pop();
-                        dec_obj<dType> dobj = dec_obj<dType>(-score,j, viterbi_alignments[beam_index] );
-                        dobj.score = score;
-                        dobj.s = s.s;
-                        
-                        if (merge_state){
-                            if (pq_set.count(dobj) == 0){
-                                pq.push(dobj);
-                                pq_set.insert(dobj);
-                            }
-                        }
-                        else {
-                            pq.push( dobj );
-                        }
-                    }
-                }
-            }
-            timer.end("sws_loop");
-            
-        }
-        
-        std::cout<<beam_index<<" "<< nprune << "/" << n << "\n";
-        } //old code
-    }
-
-    
     template<typename Derived>
     void expand_pq(std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor>& pq,     std::unordered_set<dec_obj<dType>>& pq_set,
                    const Eigen::MatrixBase<Derived> &outputDist, int beam_index, std::vector<int> &viterbi_alignments){
@@ -1355,9 +1244,7 @@ struct decoder {
             
             dType base_score = std::log(outputDist(j,beam_index));
             
-            if (false){  // style control
-            
-            timer.start("encourage");
+            timer.start("encourage"); //
             if (encourage){
                 if (this->encourage_list->count(j) > 0){
                     base_score += (*(this->encourage_list))[j];
@@ -1402,8 +1289,6 @@ struct decoder {
             // wordlen_weight;
             base_score += wordlen_weight * word_next.size() * word_next.size();
             timer.end("wordlen");
-                
-            } // sytle control
             
             n += 1;
             if (fsa_can_prune){

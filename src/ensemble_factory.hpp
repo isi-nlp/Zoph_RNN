@@ -411,15 +411,7 @@ void ensemble_factory<dType>::decode_file_interactive() {
         }
         
         //process the encourage list file and encourage weight;
-        for (int i = 0; i< encourage_list_files.size(); i++){
-            std::string encourage_file = encourage_list_files[i];
-            float weight = encourage_weights[i];
-            if (i == 0){
-                model_decoder->init_encourage_list(encourage_file, weight);
-            } else {
-                model_decoder->init_encourage_list_additional(encourage_file, weight);
-            }
-        }
+        model_decoder->init_encourage_lists(encourage_list_files,encourage_weights);
         
         //process repetition (>0 more repetition; <0 less repetition)
         model_decoder->interactive_repeat_penalty = repetition_weight;

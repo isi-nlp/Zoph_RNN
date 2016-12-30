@@ -2745,16 +2745,64 @@ void add_four_matrices_kernel_stride(dType *d_final,dType *d_mat1,dType *d_mat2,
 // each block is responsible for a beam_index;
 template<typename dType>
 __global__
-void top_k(dType *probs, dType *results, int* pointers, int* dict, int *beams, dType * sentence_scores, int *valid_vocab_sizes, int vocab_size)
+void add_features(dType *probs, dType * sentence_scores, dType * encourage,
+                  int *last_word_index, dType adjacent_weight,
+                  int *word_len, dType wordlen_weight,
+                  int *vocab_bin, dType alliteration_weight,
+                  int beam_size, int vocab_size){
+    /*
+     probs: beam_size * vocab_size;
+     sentence_scores: beam_size;
+     encourange: vocab_size;
+     last_word_index : beam_size;
+     word_len : vocab_size;
+     */
+    int beam_index = blockIdx.x;
+    dType sentence_score = sentence_scores[beam_index];
+    int last_word = last_word_index[beam_index];
+    for(int index=threadIdx.x; index<vocab_size; index+=blockDim.x){
+        int global_index = index + beam_index * vocab_size;
+        probs[global_index] = log( probs[global_index] ) + sentence_score + encourage[index] + wordlen_weight * word_len[index] * word_len[index];
+        if (last_word >=0){
+            probs[global_index] += adjacent_weight * (index == last_word);
+            probs[global_index] += alliteration_weight * (vocab_bin[last_word] == vocab_bin[index]);
+        }
+        
+    }
+}
+
+template<typename dType>
+__global__
+void add_feature_repeat(dType *probs,
+                  int *sentence_set, dType repeat_weight, int size,
+                  int vocab_size){
+    /*
+     sentence_set : [word_index, beam_index, occr_times , ... ,]  = size * 3
+     */
+    for(int index=threadIdx.x + blockIdx.x*blockDim.x; index<size; index+=gridDim.x*blockDim.x) {
+        int word_index = sentence_set[index*3];
+        int beam_index = sentence_set[index*3+1];
+        int occr_times = sentence_set[index*3+2];
+        probs[word_index + beam_index * vocab_size] += occr_times * repeat_weight;
+    }
+}
+
+
+
+
+
+// each block is responsible for a beam_index;
+template<typename dType>
+__global__
+void top_k(dType *probs, dType *results, int* pointers, int* dict, int *beams, int *valid_vocab_sizes, int vocab_size)
 {
     int beam_index = blockIdx.x;
     int start = valid_vocab_sizes[beam_index];
     int end = valid_vocab_sizes[beam_index + 1];
-    dType sentence_score = sentence_scores[beam_index];
     for(int index=threadIdx.x; index<end - start; index+=blockDim.x) {
         int dict_index = index + start;
         int prob_index = beam_index * vocab_size + dict[dict_index];
-        results[dict_index] = log( probs[prob_index] ) + sentence_score;
+        results[dict_index] = probs[prob_index];
         beams[dict_index] = beam_index;
         pointers[dict_index] = dict_index;
     }

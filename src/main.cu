@@ -1663,16 +1663,8 @@ int main(int argc, char **argv) {
                 params.encourage_weight.push_back(f);
             }
 
-            for (int i = 0; i< params.encourage_list.size(); i++){
-                std::string encourage_file = params.encourage_list[i];
-                float weight = params.encourage_weight[i];
-                if (i == 0){
-                    ensemble_decode.model_decoder->init_encourage_list(encourage_file, weight);
-                } else {
-                    ensemble_decode.model_decoder->init_encourage_list_additional(encourage_file, weight);
-                }
-            }
-
+            ensemble_decode.model_decoder->init_encourage_lists(params.encourage_list, params.encourage_weight);
+            
         }
 
 		BZ_CUDA::logger << "-----------------Starting Decoding----------------\n";
