@@ -206,18 +206,13 @@ struct decoder {
     std::vector<state*> current_states;
     
     
-    
 	std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor> pq;
-    
-    //std::vector<std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor>> pqs;
-    
 	std::priority_queue<dec_global_obj<dType>,std::vector<dec_global_obj<dType>>, pq_global_compare_functor> pq_global;
+    std::priority_queue<dec_global_obj<dType>,std::vector<dec_global_obj<dType>>, pq_global_compare_functor> pqg; // used in expand_pq_global_gpu
 
     std::unordered_set<dec_obj<dType>> pq_set;
-    //std::vector<std::unordered_set<dec_obj<dType>>> pq_sets;
-    
-    
     std::unordered_set<dec_global_obj<dType>> pq_global_set;
+    std::unordered_set<dec_global_obj<dType>> pqg_set;
     
     
     
@@ -268,19 +263,23 @@ struct decoder {
     dType *d_outputdist_topk; // [vocab_size, beam_size] need to allocate;
     dType *h_outputdist_topk; // need to allocate;
     
+    // to save vocab_index
+    int *d_dict;    // [vocab_size, beam_size] need to allocate;
+    int *h_dict;    // need to allocate;
     
     // to save pointer
     int *d_pointers;
     int *h_pointers;
-    // to save vocab_index
-    int *d_dict;    // [vocab_size, beam_size] need to allocate;
-    int *h_dict;    // need to allocate;
     // to save beam_index
     int *d_beams;
     int *h_beams;
     // to save valid_vocab_size;
     int *d_valid_vocab_sizes;
     int *h_valid_vocab_sizes;
+    // to save top_sentence_score;
+    dType *d_sentence_scores;
+    dType *h_sentence_scores;
+    
     
     
     std::vector<cudaStream_t> streams;
@@ -358,7 +357,10 @@ struct decoder {
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_valid_vocab_sizes, (beam_size+1)*1*sizeof(int)),"d_valid_vocab_sizes allocation failed\n");
         h_valid_vocab_sizes = (int *)malloc((beam_size+1)*1*sizeof(int));
         //CUDA_ERROR_WRAPPER(cudaHostRegister(h_valid_vocab_sizes, (beam_size+1) * sizeof(int), cudaHostRegisterPortable),"h_valid_vocab_sizes pinned memeory error!");
-         
+        
+        // d_sentence_scores
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_sentence_scores, beam_size*sizeof(dType)),"d_sentence_scores in decoder allocation failed\n");
+        h_sentence_scores = (dType *)malloc(beam_size*1*sizeof(dType));
         
         
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist, beam_size*vocab_size*sizeof(dType)),"d_outputdist in decoder allocation failed\n");
@@ -366,7 +368,7 @@ struct decoder {
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_topk, vocab_size*beam_size*sizeof(dType)),"d_outputdist_topk in decoder allocation failed\n");
 
         h_outputdist_topk = (dType *)malloc(vocab_size*beam_size*1*sizeof(dType));
-        CUDA_ERROR_WRAPPER(cudaHostRegister(h_outputdist_topk, vocab_size * beam_size * sizeof(dType), cudaHostRegisterPortable),"h_outputdist_topk pinned memeory error!");
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(h_outputdist_topk, vocab_size * beam_size * sizeof(dType), cudaHostRegisterPortable),"h_outputdist_topk pinned memeory error!");
         
          
         // for cuda streams
@@ -387,11 +389,12 @@ struct decoder {
         free(h_outputdist_topk);
         cudaFree(d_outputdist_topk);
 
-        free(h_pointers);
-        cudaFree(d_pointers);
-        
         free(h_dict);
         cudaFree(d_dict);
+        
+        
+        free(h_pointers);
+        cudaFree(d_pointers);
         
         free(h_beams);
         cudaFree(d_beams);
@@ -399,6 +402,8 @@ struct decoder {
         free(h_valid_vocab_sizes);
         cudaFree(d_valid_vocab_sizes);
         
+        free(h_sentence_scores);
+        cudaFree(d_sentence_scores);
         
         //for streams
         for (int i=0; i < beam_size; i++){
@@ -477,6 +482,7 @@ struct decoder {
         this->fsa_log = params.fsa_log;
         this->with_fsa = true;
         if (this->fsa_weight >=0){
+            // also, the log(weight) on fsa's edge should < 0.0;
             this->fsa_can_prune = true;
         }
     }
@@ -529,6 +535,17 @@ struct decoder {
 	}
     }
 
+    
+    void empty_queue_global(std::priority_queue<dec_global_obj<dType>,std::vector<dec_global_obj<dType>>, pq_global_compare_functor> &pq, std::unordered_set<dec_global_obj<dType>> &pq_set) {
+        while(!pq.empty()) {
+            pq.pop();
+        }
+        if (merge_state){
+            pq_set.clear();
+        }
+    }
+
+    
 	void empty_queue_global() {
 		while(!pq_global.empty()) {
 			pq_global.pop();
@@ -617,6 +634,15 @@ struct decoder {
     }
 
     template<typename Derived>
+    void print_matrix(Derived *mat, int size,std::string name){
+        std::cout<<name<<"\n";
+        for (int i = 0; i< size; i++){
+            std:: cout << mat[i] << " ";
+        }
+        std:: cout<< "\n";
+    }
+    
+    template<typename Derived>
     void expand_hypothesis_with_fsa(const Eigen::MatrixBase<Derived> &outputDist,int index,std::vector<int> &viterbi_alignments) {
         
         timer.clear();
@@ -644,145 +670,88 @@ struct decoder {
                            "expand_hypothesis_with_fsa h_outputdist to d_outputdist\n");
         timer.end("h_outputdist_to_gpu");
         
-        
-        
+
         int cols=outputDist.cols();
         if(index==0) {
             cols = 1;
-        }
-        
-        // calculate next_word_indicies;
-        timer.start("next_word_loop");
-        for(int i=0; i<cols; i++) {
-            this->current_states[i]->next_word_indicies();
-        }
-        timer.end("next_word_loop");
-        cudaProfilerStart();
-        timer.start("gpusort_loop");
-        // transfer d_dict;
-        int total_valid_size = 0;
-        for(int i=0; i<cols; i++) {
-            state * istate = this->current_states[i];
-            int valid_vocab_size = istate->next_word_index_set->size();
-            int * d_dict_local = d_dict + total_valid_size;
-            h_valid_vocab_sizes[i] = total_valid_size;
-
-            // dict2array
-            CUDA_ERROR_WRAPPER(cudaMemcpyAsync(d_dict_local, istate->h_dict,
-                                          valid_vocab_size*sizeof(int),
-                                          cudaMemcpyHostToDevice, streams[i]),
-                               "expand_pq 1 h_dict to d_dict\n");
-            total_valid_size += valid_vocab_size;
-        }
-        h_valid_vocab_sizes[cols] = total_valid_size;
-        std::cout << total_valid_size << "\n";
-        // sync
-        for(int i=0; i<cols; i++) {
-            cudaStreamSynchronize(streams[i]);
-        }
-        
-        CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
-                                           (cols+1)*sizeof(int),
-                                           cudaMemcpyHostToDevice),
-                           "expand_pq 1 h_valid_vocab_sizes to d_valid_vocab_sizes\n");
-        
-        // log kernel;
-        top_k<<<cols,256>>>(d_outputdist, d_outputdist_topk, d_pointers, d_dict, d_beams, d_valid_vocab_sizes, vocab_size);
-        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + total_valid_size, d_pointers, thrust::greater<dType>());
-        
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist_topk, d_outputdist_topk,
-                                      total_valid_size*sizeof(int),
-                                      cudaMemcpyDeviceToHost),
-                           "expand_pq 1 d_outputdist_topk to h_outputdist_topk\n");
-        
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_pointers, d_pointers,
-                                      total_valid_size*sizeof(int),
-                                      cudaMemcpyDeviceToHost),
-                           "expand_pq 1 d_pointers to h_pointers\n");
-        
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_dict, d_dict,
-                                           total_valid_size*sizeof(int),
-                                           cudaMemcpyDeviceToHost),
-                           "expand_pq 1 d_dict to h_dict\n");
-        
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_beams, d_beams,
-                                      total_valid_size*sizeof(int),
-                                      cudaMemcpyDeviceToHost),
-                           "expand_pq 1 d_beams to h_beams\n");
-
-        timer.end("gpusort_loop");
-        cudaProfilerStop();
-        
-        timer.start("for_loop_1_new");
-        
-        this->invalid_number = 0;
-        empty_queue_global();
-        
-        int ipointer = 0;
-        while(ipointer < total_valid_size){
-            if (pq_global.size() >= cols * cols){
-                break;
-            }
-            int p = h_pointers[ipointer];
-            int beam_index = h_beams[p];
-            int vocab_index = h_dict[p];
-            int viterbi_alignment = viterbi_alignments[beam_index];
-            dType val = h_outputdist_topk[p];
-            dec_global_obj<dType> dgobj =  dec_global_obj<dType>(val + top_sentences_scores(beam_index),beam_index, vocab_index, viterbi_alignment)
-            ;
-            if (merge_state){
-                if (pq_global_set.count(dgobj) == 0){
-                    pq_global.push(dgobj);
-                    pq_global_set.insert(dgobj);
+        } else {
+            cols = 0;
+            for (int i = 0; i <beam_size; i++){
+                int symbol = this->current_indices(i);
+                if (symbol == this->invalid_symbol){
+                    break;
                 }
+                cols += 1;
             }
-            else {
-                pq_global.push( dgobj );
-            }
-
-            ipointer += 1;
         }
         
-        timer.end("for_loop_1_new");
+        std::cout<< "cols " << cols << "\n";
         
-        if (false){
-        timer.start("for_loop_1");
-        
-        for(int i=0; i<cols; i++) {
+        if(true){
+            this->expand_pq_global_gpu(pqg,pqg_set, viterbi_alignments, cols);
             
-            int symbol = this->current_indices(i);
-            if (symbol == this->invalid_symbol){
-                break;
-            }
+            this->invalid_number = 0;
+            empty_queue_global();
             
-            timer.start("expand_pq");
-            this->expand_pq_gpu(pq,pq_set,outputDist,i,viterbi_alignments);
-            timer.end("expand_pq");
-            
-            timer.start("global_pq");
-            
-            //Now have the top elements
-            while(!pq.empty()) {
-                dec_obj<dType> temp = pq.top();
-                pq.pop();
-                dec_global_obj<dType> dgobj =  dec_global_obj<dType>(-temp.val + top_sentences_scores(i),i,temp.vocab_index, temp.viterbi_alignment);
-                dgobj.s = temp.s;
-                dgobj.score = temp.score + top_sentences_scores(i);
+            while(!pqg.empty()) {
+                dec_global_obj<dType> temp = pqg.top();
+                pqg.pop();
+                temp.val = -temp.val;
                 
                 if (merge_state){
-                    if (pq_global_set.count(dgobj) == 0){
-                        pq_global.push(dgobj);
-                        pq_global_set.insert(dgobj);
+                    if (pq_global_set.count(temp) == 0){
+                        pq_global.push(temp);
+                        pq_global_set.insert(temp);
                     }
                 }
                 else {
-                    pq_global.push( dgobj );
+                    pq_global.push( temp );
                 }
             }
-            timer.end("global_pq");
         }
         
-        timer.end("for_loop_1");
+        if (false){
+            
+            this->invalid_number = 0;
+            empty_queue_global();
+            
+            timer.start("for_loop_1");
+            
+            for(int i=0; i<cols; i++) {
+                
+                int symbol = this->current_indices(i);
+                if (symbol == this->invalid_symbol){
+                    break;
+                }
+                
+                timer.start("expand_pq");
+                this->expand_pq_gpu(pq,pq_set,outputDist,i,viterbi_alignments);
+                timer.end("expand_pq");
+                
+                timer.start("global_pq");
+                
+                //Now have the top elements
+                while(!pq.empty()) {
+                    dec_obj<dType> temp = pq.top();
+                    pq.pop();
+                    dec_global_obj<dType> dgobj =  dec_global_obj<dType>(-temp.val + top_sentences_scores(i),i,temp.vocab_index, temp.viterbi_alignment);
+                    dgobj.s = temp.s;
+                    dgobj.score = temp.score + top_sentences_scores(i);
+                    
+                    if (merge_state){
+                        if (pq_global_set.count(dgobj) == 0){
+                            pq_global.push(dgobj);
+                            pq_global_set.insert(dgobj);
+                        }
+                    }
+                    else {
+                        pq_global.push( dgobj );
+                    }
+                }
+                timer.end("global_pq");
+            }
+            
+            timer.end("for_loop_1");
         }
         // filter the pq_global
         // so that dec_global_obj in pq_global has unique (history, vocab_index, state.name)
@@ -968,6 +937,162 @@ struct decoder {
         //cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice);
     }
 
+    //template<typename Derived>
+    void expand_pq_global_gpu(
+        std::priority_queue<dec_global_obj<dType>,std::vector<dec_global_obj<dType>>, pq_global_compare_functor> & pqg, std::unordered_set<dec_global_obj<dType>>& pqg_set, std::vector<int> &viterbi_alignments, int cols){
+        
+        empty_queue_global(pqg,pqg_set);
+        
+        if (cols <=0){
+            return;
+        }
+        
+        timer.start("next_word_loop");
+        // calculate next_word_indicies;
+        for(int i=0; i<cols; i++) {
+            this->current_states[i]->next_word_indicies();
+        }
+        timer.end("next_word_loop");
+        
+        cudaProfilerStart();
+        timer.start("gpusort_loop");
+        // transfer d_dict;
+        int total_valid_size = 0;
+        for(int i=0; i<cols; i++) {
+            state * istate = this->current_states[i];
+            int valid_vocab_size = istate->next_word_index_set->size();
+            int * d_dict_local = d_dict + total_valid_size;
+            h_valid_vocab_sizes[i] = total_valid_size;
+            
+            // dict2array
+            CUDA_ERROR_WRAPPER(cudaMemcpyAsync(d_dict_local, istate->h_dict,
+                                               valid_vocab_size*sizeof(int),
+                                               cudaMemcpyHostToDevice, streams[i]),
+                               "expand_pq 1 h_dict to d_dict\n");
+            total_valid_size += valid_vocab_size;
+        }
+        h_valid_vocab_sizes[cols] = total_valid_size;
+        std::cout << "total_valid_size "<<total_valid_size << "\n";
+        
+        // sync
+        for(int i=0; i<cols; i++) {
+            cudaStreamSynchronize(streams[i]);
+        }
+        
+        // prepare valid_vocab_sizes;
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
+                                      (beam_size+1)*sizeof(int),
+                                      cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_valid_vocab_sizes to d_valid_vocab_sizes\n");
+        
+        // prepare top_sentence_scores;
+        for (int i = 0; i < cols; i ++){
+            h_sentence_scores[i] = top_sentences_scores(i);
+        }
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_sentence_scores, h_sentence_scores,
+                                      cols*sizeof(dType),
+                                      cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_sentence_scores to d_sentence_scores\n");
+        
+        // log kernel;
+        top_k<<<cols,256>>>(d_outputdist, d_outputdist_topk, d_pointers, d_dict, d_beams, d_sentence_scores, d_valid_vocab_sizes, vocab_size);
+        
+        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + total_valid_size, d_pointers, thrust::greater<dType>());
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist_topk, d_outputdist_topk,
+                                      total_valid_size*sizeof(dType),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_outputdist_topk to h_outputdist_topk\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_pointers, d_pointers,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_pointers to h_pointers\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_dict, d_dict,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_dict to h_dict\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_beams, d_beams,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_beams to h_beams\n");
+        
+        timer.end("gpusort_loop");
+
+        cudaProfilerStop();
+        
+        
+        timer.start("for_loop_1_new");
+        if (false && total_valid_size < 10000){
+            print_matrix(h_valid_vocab_sizes, beam_size + 1, "h_valid_vocab_sizes");
+            print_matrix(h_beams, total_valid_size, "h_beams");
+            print_matrix(h_pointers, total_valid_size, "h_pointers");
+            print_matrix(h_outputdist_topk, total_valid_size, "h_outputdist_topk");
+        }
+        
+        int pq_size_limit = beam_size * cols;
+        int nprune = 0;
+        for (int ipointer = 0; ipointer < total_valid_size; ipointer ++){
+            
+            dType base_score = h_outputdist_topk[ipointer];
+            // base_score already includes the top_sentences_scores;
+            if (fsa_can_prune){
+                if (pqg.size() >= pq_size_limit){
+                    dType upper_bound = base_score;
+                    if ( - upper_bound > pqg.top().val){
+                        nprune += 1;
+                        break;
+                    }
+                }
+            }
+            
+            int p = h_pointers[ipointer];
+            int beam_index = h_beams[p];
+            int vocab_index = h_dict[p];
+            int viterbi_alignment = viterbi_alignments[beam_index];
+            
+            state * istate = this->current_states[beam_index];
+            std::vector<sw> sws;
+            this->fsa_model->next_states(istate,vocab_index,sws);
+            
+            for (auto const & s:sws){
+                dType score = base_score;
+                dType fsa_score = 0.0;
+                fsa_score = this->fsa_weight * s.weight;
+                score += fsa_score;
+                
+                //if (total_valid_size < 10000){
+                //std::cout<< p << " " << beam_index << " " << vocab_index << " " << viterbi_alignment << " " << score << "\n";
+                //}
+                
+                dec_global_obj<dType> dgobj =  dec_global_obj<dType>(-score,beam_index, vocab_index, viterbi_alignment);
+                dgobj.s = s.s;
+                dgobj.score = score;
+                
+                if(pqg.size() >= pq_size_limit ) {
+                    pqg.pop();
+                }
+                
+                if (merge_state){
+                    if (pqg_set.count(dgobj) == 0){
+                        pqg.push(dgobj);
+                        pqg_set.insert(dgobj);
+                    }
+                }
+                else {
+                    pqg.push( dgobj );
+                }
+            }
+        }
+        std::cout<< "nprune / pq_limit " << nprune << "/" << pq_size_limit << "\n";
+        
+        timer.end("for_loop_1_new");
+        
+    }
+    
+    
     template<typename Derived>
     void expand_pq_gpu(std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor>& pq,     std::unordered_set<dec_obj<dType>>& pq_set,
                    const Eigen::MatrixBase<Derived> &outputDist, int beam_index, std::vector<int> &viterbi_alignments){
@@ -1019,9 +1144,20 @@ struct decoder {
         
         timer.start("put");
 
-        for (int i = 0; i < std::min(beam_size,valid_vocab_size); i ++ ){
+        for (int i = 0; i < valid_vocab_size; i ++ ){
             int j = h_dict[i];
             dType base_score = h_outputdist_topk[i];
+            
+            if (fsa_can_prune){
+                if (pq.size() >= beam_size){
+                    dType upper_bound = base_score;
+                    if ( - upper_bound > pq.top().val){
+                        nprune += 1;
+                        break;
+                    }
+                }
+            }
+
             
             timer.start("next_states");
             //0.008s
@@ -1042,6 +1178,9 @@ struct decoder {
                 dobj.score = score;
                 dobj.s = s.s;
                 
+                if(pq.size() >= beam_size ) {
+                    pq.pop();
+                }
                 if (merge_state){
                     // this is necessary for the following cases:
                     // 1. (1 (2 *e* 0.5))
@@ -1056,7 +1195,7 @@ struct decoder {
                 else {
                     pq.push( dobj );
                 }
-                
+
             }
             timer.end("sws_loop");
             

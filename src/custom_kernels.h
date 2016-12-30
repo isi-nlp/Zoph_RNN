@@ -2745,15 +2745,16 @@ void add_four_matrices_kernel_stride(dType *d_final,dType *d_mat1,dType *d_mat2,
 // each block is responsible for a beam_index;
 template<typename dType>
 __global__
-void top_k(dType *probs, dType *results, int* pointers, int* dict, int *beams, int *valid_vocab_sizes, int vocab_size)
+void top_k(dType *probs, dType *results, int* pointers, int* dict, int *beams, dType * sentence_scores, int *valid_vocab_sizes, int vocab_size)
 {
     int beam_index = blockIdx.x;
     int start = valid_vocab_sizes[beam_index];
     int end = valid_vocab_sizes[beam_index + 1];
+    dType sentence_score = sentence_scores[beam_index];
     for(int index=threadIdx.x; index<end - start; index+=blockDim.x) {
         int dict_index = index + start;
         int prob_index = beam_index * vocab_size + dict[dict_index];
-        results[dict_index] = log( probs[prob_index] );
+        results[dict_index] = log( probs[prob_index] ) + sentence_score;
         beams[dict_index] = beam_index;
         pointers[dict_index] = dict_index;
     }
