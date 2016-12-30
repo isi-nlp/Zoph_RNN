@@ -96,6 +96,7 @@ std::unordered_set<int>* state::next_word_indicies() {
         }
         
         this->h_dict = (int *)malloc(this->next_word_index_set->size()*1*sizeof(int));
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(this->h_dict, this->next_word_index_set->size()*1*sizeof(int), cudaHostRegisterPortable),"h_dict in fsa.hpp pinned memeory error!");
         int i = 0;
         for (int index : *(this->next_word_index_set)){
             this->h_dict[i] = index;

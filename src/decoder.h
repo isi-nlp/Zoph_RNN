@@ -265,15 +265,25 @@ struct decoder {
 
     dType *h_outputdist; // [vocab_size, beam_size] point to models[0].h_outputdist;
     dType *d_outputdist; // need to allocate;
-    dType *d_outputdist_topk; // need to allocate;
+    dType *d_outputdist_topk; // [vocab_size, beam_size] need to allocate;
     dType *h_outputdist_topk; // need to allocate;
     
-    int *d_dict;    // need to allocate;
+    
+    // to save pointer
+    int *d_pointers;
+    int *h_pointers;
+    // to save vocab_index
+    int *d_dict;    // [vocab_size, beam_size] need to allocate;
     int *h_dict;    // need to allocate;
+    // to save beam_index
+    int *d_beams;
+    int *h_beams;
+    // to save valid_vocab_size;
+    int *d_valid_vocab_sizes;
+    int *h_valid_vocab_sizes;
     
-    thrust::device_ptr<dType> thrust_outputdist_topk;
-    thrust::device_ptr<int> thrust_dict;
     
+    std::vector<cudaStream_t> streams;
     
 	decoder(int beam_size,int vocab_size,int start_symbol,int end_symbol,int max_decoding_length,dType min_decoding_ratio,
             dType penalty,std::string output_file_name,int num_hypotheses,bool print_score, global_params &params)
@@ -327,33 +337,74 @@ struct decoder {
         
         // for expand_pq_gpu
         
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_dict, vocab_size*1*sizeof(int)),"d_dict allocation failed\n");
+        std::cout<< "init_decoder\n";
+        
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_dict, vocab_size*beam_size*1*sizeof(int)),"d_dict allocation failed\n");
+        h_dict = (int *)malloc(vocab_size*beam_size*1*sizeof(int));
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(h_dict, vocab_size * beam_size * sizeof(int), cudaHostRegisterPortable),"h_dict pinned memeory error!");
+        
+        
+        // d_pointers
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_pointers, vocab_size*beam_size*1*sizeof(int)),"d_pointers allocation failed\n");
+        h_pointers = (int *)malloc(vocab_size*beam_size*1*sizeof(int));
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(h_pointers, vocab_size * beam_size * sizeof(int), cudaHostRegisterPortable),"h_pointers pinned memeory error!");
+        
+        // d_beams
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_beams, vocab_size*beam_size*1*sizeof(int)),"d_beams allocation failed\n");
+        h_beams = (int *)malloc(vocab_size*beam_size*1*sizeof(int));
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(h_beams, vocab_size * beam_size * sizeof(int), cudaHostRegisterPortable),"h_beams pinned memeory error!");
 
-        h_dict = (int *)malloc(vocab_size*1*sizeof(int));
+        // d_valid_vocab_sizes
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_valid_vocab_sizes, (beam_size+1)*1*sizeof(int)),"d_valid_vocab_sizes allocation failed\n");
+        h_valid_vocab_sizes = (int *)malloc((beam_size+1)*1*sizeof(int));
+        //CUDA_ERROR_WRAPPER(cudaHostRegister(h_valid_vocab_sizes, (beam_size+1) * sizeof(int), cudaHostRegisterPortable),"h_valid_vocab_sizes pinned memeory error!");
+         
+        
         
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist, beam_size*vocab_size*sizeof(dType)),"d_outputdist in decoder allocation failed\n");
 
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_topk, vocab_size*sizeof(dType)),"d_outputdist_topk in decoder allocation failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_topk, vocab_size*beam_size*sizeof(dType)),"d_outputdist_topk in decoder allocation failed\n");
 
-        h_outputdist_topk = (dType *)malloc(vocab_size*1*sizeof(dType));
+        h_outputdist_topk = (dType *)malloc(vocab_size*beam_size*1*sizeof(dType));
+        CUDA_ERROR_WRAPPER(cudaHostRegister(h_outputdist_topk, vocab_size * beam_size * sizeof(dType), cudaHostRegisterPortable),"h_outputdist_topk pinned memeory error!");
         
-        thrust_outputdist_topk = thrust::device_pointer_cast(d_outputdist_topk);
-        thrust_dict = thrust::device_pointer_cast(d_dict);
-
+         
+        // for cuda streams
+        for (int i=0; i < beam_size; i++){
+            cudaStream_t stream;
+            cudaStreamCreate(&stream);
+            streams.push_back(stream);
+        }
         
     }
     
 	~decoder() {
 		output.close();
         free(h_current_indices);
-        free(h_outputdist_topk);
-        free(h_dict);
         
-        cudaFree(d_dict);
         cudaFree(d_outputdist);
+        
+        free(h_outputdist_topk);
         cudaFree(d_outputdist_topk);
-        //delete this->pool;
-		//cudaFree(d_current_indices);
+
+        free(h_pointers);
+        cudaFree(d_pointers);
+        
+        free(h_dict);
+        cudaFree(d_dict);
+        
+        free(h_beams);
+        cudaFree(d_beams);
+        
+        free(h_valid_vocab_sizes);
+        cudaFree(d_valid_vocab_sizes);
+        
+        
+        //for streams
+        for (int i=0; i < beam_size; i++){
+            cudaStreamDestroy(streams[i]);
+        }
+
         
     }
     // for encourage list
@@ -594,14 +645,107 @@ struct decoder {
         timer.end("h_outputdist_to_gpu");
         
         
+        
         int cols=outputDist.cols();
         if(index==0) {
             cols = 1;
         }
         
+        // calculate next_word_indicies;
+        timer.start("next_word_loop");
+        for(int i=0; i<cols; i++) {
+            this->current_states[i]->next_word_indicies();
+        }
+        timer.end("next_word_loop");
+        cudaProfilerStart();
+        timer.start("gpusort_loop");
+        // transfer d_dict;
+        int total_valid_size = 0;
+        for(int i=0; i<cols; i++) {
+            state * istate = this->current_states[i];
+            int valid_vocab_size = istate->next_word_index_set->size();
+            int * d_dict_local = d_dict + total_valid_size;
+            h_valid_vocab_sizes[i] = total_valid_size;
+
+            // dict2array
+            CUDA_ERROR_WRAPPER(cudaMemcpyAsync(d_dict_local, istate->h_dict,
+                                          valid_vocab_size*sizeof(int),
+                                          cudaMemcpyHostToDevice, streams[i]),
+                               "expand_pq 1 h_dict to d_dict\n");
+            total_valid_size += valid_vocab_size;
+        }
+        h_valid_vocab_sizes[cols] = total_valid_size;
+        std::cout << total_valid_size << "\n";
+        // sync
+        for(int i=0; i<cols; i++) {
+            cudaStreamSynchronize(streams[i]);
+        }
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
+                                           (cols+1)*sizeof(int),
+                                           cudaMemcpyHostToDevice),
+                           "expand_pq 1 h_valid_vocab_sizes to d_valid_vocab_sizes\n");
+        
+        // log kernel;
+        top_k<<<cols,256>>>(d_outputdist, d_outputdist_topk, d_pointers, d_dict, d_beams, d_valid_vocab_sizes, vocab_size);
+        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + total_valid_size, d_pointers, thrust::greater<dType>());
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist_topk, d_outputdist_topk,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_outputdist_topk to h_outputdist_topk\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_pointers, d_pointers,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_pointers to h_pointers\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_dict, d_dict,
+                                           total_valid_size*sizeof(int),
+                                           cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_dict to h_dict\n");
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_beams, d_beams,
+                                      total_valid_size*sizeof(int),
+                                      cudaMemcpyDeviceToHost),
+                           "expand_pq 1 d_beams to h_beams\n");
+
+        timer.end("gpusort_loop");
+        cudaProfilerStop();
+        
+        timer.start("for_loop_1_new");
+        
         this->invalid_number = 0;
         empty_queue_global();
         
+        int ipointer = 0;
+        while(ipointer < total_valid_size){
+            if (pq_global.size() >= cols * cols){
+                break;
+            }
+            int p = h_pointers[ipointer];
+            int beam_index = h_beams[p];
+            int vocab_index = h_dict[p];
+            int viterbi_alignment = viterbi_alignments[beam_index];
+            dType val = h_outputdist_topk[p];
+            dec_global_obj<dType> dgobj =  dec_global_obj<dType>(val + top_sentences_scores(beam_index),beam_index, vocab_index, viterbi_alignment)
+            ;
+            if (merge_state){
+                if (pq_global_set.count(dgobj) == 0){
+                    pq_global.push(dgobj);
+                    pq_global_set.insert(dgobj);
+                }
+            }
+            else {
+                pq_global.push( dgobj );
+            }
+
+            ipointer += 1;
+        }
+        
+        timer.end("for_loop_1_new");
+        
+        if (false){
         timer.start("for_loop_1");
         
         for(int i=0; i<cols; i++) {
@@ -639,8 +783,13 @@ struct decoder {
         }
         
         timer.end("for_loop_1");
+        }
         // filter the pq_global
         // so that dec_global_obj in pq_global has unique (history, vocab_index, state.name)
+        // this is necessary: if two dec_global_obj have the same (history, vocab_index, state.name)
+        // then they will have the same future, but different history. If we don't merge this, the whole beam will be occuped by
+        // dec_global_obj with same (history, vocab_index, state.name).
+        
         timer.start("filter");
         
         std::cout<<"before: "<<pq_global.size()<<"\n";
@@ -650,11 +799,12 @@ struct decoder {
         std::unordered_map<int,int> beam_index_to_hash;
         for(int i=0; i<cols; i++) {
             std::string history = "";
-            for (int j = 0; j< current_index; j++){
+            for (int j = 0; j<= current_index; j++){
                 history += std::to_string(top_sentences(i,j)) + " ";
             }
             if (history_to_hash.count(history) == 0){
                 history_to_hash[history] = hash_index;
+                //std::cout <<"history: " <<i << " "<< history << " " <<hash_index << "\n";
                 hash_index += 1;
             }
             beam_index_to_hash[i] = history_to_hash[history];
@@ -673,9 +823,8 @@ struct decoder {
                 filtered_queue[key] = dgobj;
             } else {
                 dec_global_obj<dType> old_dgobj = filtered_queue[key];
-                //BZ_CUDA::logger << "[-----]" << key << " "<< dgobj.val << " " << old_dgobj.val <<"\n";
+                //std::cout << "[-----]" << key << " "<< dgobj.val << " " << old_dgobj.val <<"\n";
                 if (dgobj.val > old_dgobj.val){
-                    //BZ_CUDA::logger << "[-----]" << key << " "<< dgobj.val << " " << old_dgobj.val <<"\n";
                     filtered_queue[key] = dgobj;
                 }
             }
@@ -841,7 +990,8 @@ struct decoder {
         
         timer.start("dict2array");
         // ?s
-    
+        //std::cout<< valid_vocab_size << " " << h_dict << " " << d_dict << "\n";
+
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_dict, istate->h_dict,
                                       valid_vocab_size*sizeof(int),
                                       cudaMemcpyHostToDevice),
@@ -855,7 +1005,7 @@ struct decoder {
         
         timer.start("gpusort");
 
-        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + valid_vocab_size, thrust_dict, thrust::greater<dType>());
+        thrust::sort_by_key(thrust::cuda::par, d_outputdist_topk, d_outputdist_topk + valid_vocab_size, d_dict, thrust::greater<dType>());
         CUDA_ERROR_WRAPPER(cudaMemcpy(h_dict, d_dict,
                                       valid_vocab_size*sizeof(int),
                                       cudaMemcpyDeviceToHost),
@@ -893,6 +1043,11 @@ struct decoder {
                 dobj.s = s.s;
                 
                 if (merge_state){
+                    // this is necessary for the following cases:
+                    // 1. (1 (2 *e* 0.5))
+                    // 2. (1 (3 a 0.5))
+                    // 3. (2 (3 a 0.5))
+                    
                     if (pq_set.count(dobj) == 0){
                         pq.push(dobj);
                         pq_set.insert(dobj);
