@@ -760,7 +760,7 @@ struct decoder {
         
         int cols=outputDist.cols();
         
-        if(false){
+        if(true){ // gpu expand
             if(index==0) {
                 cols = 1;
             } else {
@@ -798,7 +798,7 @@ struct decoder {
             }
         }
         
-        if (true){
+        if (false){  // cpu_expand
             
             if(index==0) {
                 cols = 1;
@@ -1107,14 +1107,17 @@ struct decoder {
                 sentence_set_size += 1;
             }
         }
-        CUDA_ERROR_WRAPPER(cudaMemcpy(d_sentence_set, h_sentence_set,
-                                      sentence_set_size*3*sizeof(int),
-                                      cudaMemcpyHostToDevice),
-                           "expand_pq 1 h_sentence_set to d_sentence_set\n");
+        std::cout<<"sentence_set_size "<< sentence_set_size << "\n";
         
-        // add_feature_repeat;
-        add_feature_repeat<<<std::min(256,(sentence_set_size + 256 - 1)/256),256>>>(d_outputdist, d_sentence_set, repeat_penalty + interactive_repeat_penalty, sentence_set_size, vocab_size);
-        
+        if (sentence_set_size > 0){
+            CUDA_ERROR_WRAPPER(cudaMemcpy(d_sentence_set, h_sentence_set,
+                                          sentence_set_size*3*sizeof(int),
+                                          cudaMemcpyHostToDevice),
+                               "expand_pq 1 h_sentence_set to d_sentence_set\n");
+            
+            // add_feature_repeat;
+            add_feature_repeat<<<std::min(256,(sentence_set_size + 256 - 1)/256),256>>>(d_outputdist, d_sentence_set, repeat_penalty + interactive_repeat_penalty, sentence_set_size, vocab_size);
+        }
         
         // prepare valid_vocab_sizes;
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
@@ -1235,7 +1238,7 @@ struct decoder {
         
         
         timer.start("next_word_indicies");
-        // 0.04s
+        // 0.005s
         std::unordered_set<int>* next_indicies = istate->next_word_indicies();
         timer.end("next_word_indicies");
         
@@ -1244,15 +1247,15 @@ struct decoder {
             
             dType base_score = std::log(outputDist(j,beam_index));
             
-            timer.start("encourage"); //
+            ///timer.start("encourage"); //
             if (encourage){
                 if (this->encourage_list->count(j) > 0){
                     base_score += (*(this->encourage_list))[j];
                 }
             }
-            timer.end("encourage");
+            ///timer.end("encourage");
             
-            timer.start("penalize_repeat");
+            ///timer.start("penalize_repeat");
             if (penalize_repeat){
                 if ((sentence_sets[beam_index]).count(j) > 0){
                     //BZ_CUDA::logger<<"Beam: "<<i<<" Repeat: "<<j<<" "<<base_score;
@@ -1261,34 +1264,35 @@ struct decoder {
                 }
             }
             
-            timer.end("penalize_repeat");
-            timer.start("adjacent_repeat");
+            ///timer.end("penalize_repeat");
+            
+            ///timer.start("adjacent_repeat");
             if (penalize_adjacent_repeat){
                 if (this->current_indices(beam_index) == j){
                     base_score += adjacent_repeat_penalty;
                 }
             }
-            timer.end("adjacent_repeat");
+            ///timer.end("adjacent_repeat");
             
             
-            timer.start("lookup words");
+            ///timer.start("lookup words");
             std::string word_current = fsa_model->index2words[this->current_indices(beam_index)];
             std::string word_next = fsa_model->index2words[j];
-            timer.end("lookup words");
+            ///timer.end("lookup words");
             
-            timer.start("alliteration_weighs");
+            ///timer.start("alliteration_weighs");
 
             // alliteration_weight;
             if (word_current[0] == word_next[0]){
                 base_score += alliteration_weight;
             }
-            timer.end("alliteration_weighs");
+            ///timer.end("alliteration_weighs");
 
-            timer.start("wordlen");
+            ///timer.start("wordlen");
 
             // wordlen_weight;
             base_score += wordlen_weight * word_next.size() * word_next.size();
-            timer.end("wordlen");
+            ///timer.end("wordlen");
             
             n += 1;
             if (fsa_can_prune){
