@@ -255,7 +255,7 @@ struct global_params {
     std::string fsa_file = "";
     float fsa_weight = 0.0;
     bool print_beam = false;
-    bool fsa_log = false;
+    bool fsa_log = true;
     bool interactive = false;
     bool interactive_line = false;
     precision repeat_penalty = 0;

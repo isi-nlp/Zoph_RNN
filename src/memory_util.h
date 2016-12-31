@@ -104,7 +104,7 @@ public:
     
     void report(std::string key){
         std::chrono::duration<double> dur = durations[key];
-        std::cout<<key<<" :"<<dur.count()<<" sec\n;";
+        std::cout<<key<<" :"<<dur.count()<<" sec\n";
     }
     
     void report(){

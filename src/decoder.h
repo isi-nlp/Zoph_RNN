@@ -184,7 +184,7 @@ struct decoder {
     bool with_fsa = false;
     bool with_fsa_compress = false;
     bool fsa_can_prune = false;
-    bool fsa_log = false;
+    bool fsa_log = true;
     bool merge_state = true;
     int invalid_number = 0;
     bool end_transfer = false; // true if in fsa_line mode
@@ -741,9 +741,9 @@ struct decoder {
     template<typename Derived>
     void expand_hypothesis_with_fsa(const Eigen::MatrixBase<Derived> &outputDist,int index,std::vector<int> &viterbi_alignments) {
         
-        timer.clear();
+        ///timer.clear();
         
-        timer.start("expand_with_fsa");
+        ///timer.start("expand_with_fsa");
         
         // viterbi_alignments check
         if(viterbi_alignments.size()!=0 && viterbi_alignments.size()!=beam_size) {
@@ -807,7 +807,7 @@ struct decoder {
             this->invalid_number = 0;
             empty_queue_global();
             
-            timer.start("for_loop_1");
+            ///timer.start("for_loop_1");
             
             for(int i=0; i<cols; i++) {
                 
@@ -816,11 +816,11 @@ struct decoder {
                     break;
                 }
                 
-                timer.start("expand_pq");
+                ///timer.start("expand_pq");
                 this->expand_pq(pq,pq_set,outputDist,i,viterbi_alignments);
-                timer.end("expand_pq");
+                ///timer.end("expand_pq");
                 
-                timer.start("global_pq");
+                ///timer.start("global_pq");
                 
                 //Now have the top elements
                 while(!pq.empty()) {
@@ -840,10 +840,10 @@ struct decoder {
                         pq_global.push( dgobj );
                     }
                 }
-                timer.end("global_pq");
+                ///timer.end("global_pq");
             }
             
-            timer.end("for_loop_1");
+            ///timer.end("for_loop_1");
         }
         // filter the pq_global
         // so that dec_global_obj in pq_global has unique (history, vocab_index, state.name)
@@ -851,7 +851,7 @@ struct decoder {
         // then they will have the same future, but different history. If we don't merge this, the whole beam will be occuped by
         // dec_global_obj with same (history, vocab_index, state.name).
         
-        timer.start("filter");
+        ///timer.start("filter");
         
         std::cout<<"before: "<<pq_global.size()<<"\n";
         
@@ -897,7 +897,7 @@ struct decoder {
         
         std::cout<<"after: "<<pq_global.size()<<"\n";
         
-        timer.end("filter");
+        ///timer.end("filter");
         
         //Now have global heap with (beam size*beam size) elements
         //Go through until (beam size) new hypotheses.
@@ -911,7 +911,7 @@ struct decoder {
         }
         
         
-        timer.start("for_loop_2");
+        ///timer.start("for_loop_2");
         
         int i = 0;
         while(i < beam_size) {
@@ -1000,7 +1000,7 @@ struct decoder {
             }
         }
         
-        timer.end("for_loop_2");
+        ///timer.end("for_loop_2");
         
         top_sentences = top_sentences_temp;
         top_sentences_scores = top_sentences_scores_temp;
@@ -1015,8 +1015,8 @@ struct decoder {
             h_current_indices[i] = current_indices(i);
         }
         
-        timer.end("expand_with_fsa");
-        timer.report();
+        ///timer.end("expand_with_fsa");
+        ///timer.report();
         
         /*
          total_end= std::chrono::system_clock::now();
@@ -1039,15 +1039,15 @@ struct decoder {
             return;
         }
         
-        timer.start("next_word_loop");
+        ///timer.start("next_word_loop");
         // calculate next_word_indicies;
         for(int i=0; i<cols; i++) {
             this->current_states[i]->next_word_indicies();
         }
-        timer.end("next_word_loop");
+        ///timer.end("next_word_loop");
         
-        cudaProfilerStart();
-        timer.start("gpusort_loop");
+        //cudaProfilerStart();
+        ///timer.start("gpusort_loop");
         // transfer d_dict;
         int total_valid_size = 0;
         for(int i=0; i<cols; i++) {
@@ -1075,12 +1075,12 @@ struct decoder {
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_current_indices,h_current_indices,beam_size*1*sizeof(int),cudaMemcpyHostToDevice),"expand_pq 1 h_current_indices to d_current_indices");
         
         // prepare d_outputdist;
-        timer.start("h_outputdist_to_gpu");
+        ///timer.start("h_outputdist_to_gpu");
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_outputdist, h_outputdist,
                                       vocab_size*beam_size*sizeof(dType),
                                       cudaMemcpyHostToDevice),
                            "expand_pq 1 h_outputdist to d_outputdist\n");
-        timer.end("h_outputdist_to_gpu");
+        ///timer.end("h_outputdist_to_gpu");
 
         // prepare top_sentence_scores;
         for (int i = 0; i < cols; i ++){
@@ -1150,12 +1150,12 @@ struct decoder {
                                       cudaMemcpyDeviceToHost),
                            "expand_pq 1 d_beams to h_beams\n");
         
-        timer.end("gpusort_loop");
+        ///timer.end("gpusort_loop");
 
-        cudaProfilerStop();
+        //cudaProfilerStop();
         
         
-        timer.start("for_loop_1_new");
+        ///timer.start("for_loop_1_new");
         if (false && total_valid_size < 10000){
             print_matrix(h_valid_vocab_sizes, beam_size + 1, "h_valid_vocab_sizes");
             print_matrix(h_beams, total_valid_size, "h_beams");
@@ -1217,9 +1217,9 @@ struct decoder {
                 }
             }
         }
-        std::cout<< "nprune / pq_limit " << nprune << "/" << pq_size_limit << "\n";
+        //std::cout<< "nprune / pq_limit " << nprune << "/" << pq_size_limit << "\n";
         
-        timer.end("for_loop_1_new");
+        ///timer.end("for_loop_1_new");
         
     }
     
@@ -1237,10 +1237,10 @@ struct decoder {
         int nrows = outputDist.rows();
         
         
-        timer.start("next_word_indicies");
+        ///timer.start("next_word_indicies");
         // 0.005s
         std::unordered_set<int>* next_indicies = istate->next_word_indicies();
-        timer.end("next_word_indicies");
+        ///timer.end("next_word_indicies");
         
         for (auto const & j : *(next_indicies)){
             if (j == -1 || j>= nrows) {continue;}
@@ -1306,14 +1306,14 @@ struct decoder {
             }
             
             
-            timer.start("next_states");
+            ///timer.start("next_states");
             //0.008s
             std::vector<sw> sws;
             this->fsa_model->next_states(istate,j,sws);
             
-            timer.end("next_states");
+            ///timer.end("next_states");
             
-            timer.start("sws_loop");
+            ///timer.start("sws_loop");
             //0.01s
             for (auto const & s:sws){
                 dType score = base_score;
@@ -1357,7 +1357,7 @@ struct decoder {
                     }
                 }
             }
-            timer.end("sws_loop");
+            ///timer.end("sws_loop");
 
         }
         

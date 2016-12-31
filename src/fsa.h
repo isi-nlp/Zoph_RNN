@@ -1,6 +1,5 @@
 #ifndef FSA_H
 #define FSA_H
-#define BOOST_DYNAMIC_BITSET_DONT_USE_FRIENDS
 #include <unordered_map>
 #include <unordered_set>
 #include <fstream>
@@ -10,7 +9,7 @@
 #include <string>
 #include <boost/regex.hpp>
 #include "format.h"
-#include <boost/dynamic_bitset.hpp>
+#include "memory_util.h"
 
 /*
  fsa weight should always (0,1];
@@ -34,9 +33,6 @@ public:
     int *h_dict;
     bool next_word_index_set_ready;
     
-    // specific for the empty info
-    std::vector<std::pair<int,int>> *empty_info;
-    
     state(){}
     
     // copy 
@@ -44,7 +40,7 @@ public:
 
     state(std::string name);
     
-    void process_link(state *d, int word, float weight, bool log_space, std::string info="");
+    void process_link(state *d, int word, float weight, bool log_space);
 
     std::string toString() const;
     
@@ -59,7 +55,6 @@ public:
     state& operator=(const state &other){
         this->name = other.name;
         this->weights = other.weights;
-        this->empty_info = other.empty_info;
         this->next_word_index_set = other.next_word_index_set;
         this->next_word_index_set_ready = other.next_word_index_set_ready;
         return *this;
@@ -93,7 +88,7 @@ public:
     std::unordered_map<std::string,state*> states;
     std::unordered_map<int,std::string> index2words;
     std::unordered_map<std::string,int> word2index;
-    bool log_space = false;
+    bool log_space = true;
     
     fsa(std::string filename){
         this->fsa_filename = filename;
@@ -103,7 +98,6 @@ public:
         for (auto &item: states){
             state *s = item.second;
             delete s->weights;
-            delete s->empty_info;
             delete s->next_word_index_set;
             free(s->h_dict);
             delete s;
@@ -118,5 +112,22 @@ public:
     void next_states(state* current_state,int index, std::vector<sw>& results);
     
 };
+
+/*
+class fourObj{
+public:
+    std::string s;
+    std::string d;
+    int word_index;
+    float weight;
+    
+    fourObj(){
+        s = "";
+        d = "";
+        word_index = -1;
+        weight = 0.0;
+    }
+};
+*/
 
 #endif

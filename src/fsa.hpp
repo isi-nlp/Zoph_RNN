@@ -12,7 +12,7 @@ state::state(const state& s)
     this->name = s.name;
     //this->links = s.links;
     this->weights = s.weights;
-    this->empty_info = s.empty_info;
+
     this->next_word_index_set = s.next_word_index_set;
     this->next_word_index_set_ready = s.next_word_index_set_ready;
 }
@@ -24,12 +24,12 @@ state::state(std::string name){
     //this->links = new std::unordered_map<std::string,std::unordered_set<state> >();
     //this->weights = new std::unordered_map<std::string,std::unordered_map<state,float> >();
     this->weights = new std::unordered_map<int,std::unordered_map<std::string, std::pair<state*,float> > >();
-    this->empty_info = new std::vector<std::pair<int,int>>();
+
     this->next_word_index_set = new std::unordered_set<int>();
     this->next_word_index_set_ready = false;
 }
 
-void state::process_link(state* d, int word, float weight, bool log_space, std::string info){
+void state::process_link(state* d, int word, float weight, bool log_space){
     if (!log_space)
     {
         weight = std::log(weight);
@@ -39,15 +39,6 @@ void state::process_link(state* d, int word, float weight, bool log_space, std::
         
     }
     (*weights)[word][d->name] = std::pair<state*,float>(d,weight);
-    if (word == -1 && info!=""){
-        boost::regex re{"([0-9]+)_([0-9]+)"};
-        boost::smatch sm;
-        boost::regex_search(info,sm,re);
-        //sm.size() == 3
-        int start = std::stoi(sm[1]);
-        int end = std::stoi(sm[2]);
-        this->empty_info->push_back(std::make_pair(start,end));
-    }
 }
 
 
@@ -64,11 +55,6 @@ std::string state::toString() const{
             s += fmt::format("{} {}",st->name,weight);
         }
         
-        if (i.first == -1){
-            for (auto const &item: * (this->empty_info)){
-                s += fmt::format(" ({},{}) ", item.first, item.second);
-            }
-        }
         
         s += '\n';
     }
@@ -164,7 +150,9 @@ void fsa::print_fsa(){
 }
 
 void fsa::load_fsa(){
+    //Timer timer;
     
+    //timer.start("load_fsa");
     std::chrono::time_point<std::chrono::system_clock> total_start= std::chrono::system_clock::now();
     
     //for (0 (1 "k"))
@@ -178,11 +166,8 @@ void fsa::load_fsa(){
     //for (0 (1 sf 0.5))
     boost::regex e4{"\\(([^ ]+)[ ]+\\(([^ ]+)[ ]+([^ ]+)[ ]+([^ ]+)[ ]*\\)\\)"};
     
-    //for (0 (0 word info 0.5))
-    boost::regex e5{"\\(([^ ]+)[ ]+\\(([^ ]+)[ ]+([^ ]+)[ ]+([^ ]+)[ ]+([^ ]+)[ ]*\\)\\)"};
-    
-    
-    boost::regex regexes[5] = {e3q,e3,e4q,e4, e5};
+    boost::regex regexes[4] = {e3q,e3,e4q,e4};
+
     
     std::ifstream fin(this->fsa_filename.c_str());
     std::string line;
@@ -190,7 +175,6 @@ void fsa::load_fsa(){
     std::getline(fin, line);
     states[line] = new state(line);
     end_state = states[line];
-    
     
     bool is_first_link = true;
     int i =0 ;
@@ -201,12 +185,91 @@ void fsa::load_fsa(){
         default_weight = 0.0;
     }
     
+    /*
+    timer.start("read_lines");
+    std::vector<std::string> lines;
+
+    
+    while (std::getline(fin,line)) {
+        //std::cout<<line<<'\n';
+        if (line.size() == 0 || line[0] == '#'){
+            continue;
+        }
+        lines.push_back(line);
+    }
+    
+    timer.end("read_lines");
+    
+    timer.start("read_lines2");
+
+    //fourObj ** fours = (fourObj **)malloc(lines.size()*sizeof(fourObj*));
+    
+    
+    #pragma omp parallel for
+    for (int i =0 ;i < lines.size(); i ++ ){
+        fourObj fo;
+        line = lines[i];
+        boost::smatch sm;
+        
+        bool matched = false;
+        for (int r=0;r<1;r++){
+            boost::regex e = regexes[r];
+            
+            if (boost::regex_search(line,sm,e)){
+                //std::cout<<sm.size()<<" "<<r<<"\n";
+                fo.s = sm[1];
+                fo.d = sm[2];
+                
+                std::string word = sm[3];
+                int word_index = 2;
+                if (word == "*e*"){
+                    word_index = -1;
+                } else {
+                    if (this->word2index.count(word)>0){
+                        word_index = this->word2index[word];
+                    } else {
+                        std::cout<<fmt::format("{} is not in vocab set\n",word);
+                    }
+                }
+
+                fo.word_index = word_index;
+                matched = true;
+                float weight = default_weight;
+                if (sm.size() == 5){
+                    weight = std::stof(sm[4]);
+                }
+                if (sm.size() == 6) {
+                    weight = std::stof(sm[5]);
+                }
+                fo.weight = weight;
+                //break;
+            }
+        }
+        if (!matched) {
+            std::cerr<<"Error in Line "<<i+2<<": "<<line<<"\n";
+            //throw("Error when parsing fsa.");
+        }
+        //fours[i] = fo;
+    }
+    */
+    /*
+    for (int i = 0 ; i < lines.size(); i ++){
+        delete fours[i];
+    }
+    
+    free(fours);
+     
+    
+    timer.end("read_lines2");
+
+    */
+    
+    
     while (std::getline(fin,line)) {
         std::string s;
         std::string d;
         std::string word;
         int word_index = -2;
-        std::string info = "";
         float weight = default_weight;
         
         
@@ -215,25 +278,23 @@ void fsa::load_fsa(){
             continue;
         }
         
+        //timer.start("regex_match");
         boost::smatch sm;
         bool matched = false;
-        for (int r=0;r<5;r++){
+        for (int r=0;r<4;r++){
             boost::regex e = regexes[r];
-            
-            if (boost::regex_match(line,e)){
-                boost::regex_search(line,sm,e);
+            if (boost::regex_search(line,sm,e)){
                 //std::cout<<sm.size()<<" "<<r<<"\n";
                 s = sm[1];
                 d = sm[2];
                 word = sm[3];
+                matched = true;
                 if (sm.size() == 5){
                     weight = std::stof(sm[4]);
                 }
                 if (sm.size() == 6) {
-                    info = sm[4];
                     weight = std::stof(sm[5]);
                 }
-                matched = true;
                 break;
             }
         }
@@ -243,6 +304,8 @@ void fsa::load_fsa(){
             throw("Error when parsing fsa.");
         }
         
+        //timer.end("regex_match");
+
         //std::cout<<s<<" "<<d<<" "<<word<<" "<<weight<<"\n";
         
         if (states.count(s) == 0){
@@ -268,10 +331,16 @@ void fsa::load_fsa(){
             }
         }
         
+        //timer.start("process_link");
+        
         if (word_index != -2){
-            states[s]->process_link(states[d],word_index,weight,this->log_space, info );
+            states[s]->process_link(states[d],word_index,weight,this->log_space);
             num_links += 1;
         }
+        
+        //timer.end("process_link");
+        
+        
         i+=1;
     }
     
@@ -290,6 +359,10 @@ void fsa::load_fsa(){
     std::cout<<"End State: "<< this->end_state->name <<"\n";
     std::cout<<"Loading with "<<total_dur.count()<<"s \n";
     std::cout<<"--------------------------------------------------------\n";
+
+    //timer.end("load_fsa");
+    
+    //timer.report();
     
 }
 
