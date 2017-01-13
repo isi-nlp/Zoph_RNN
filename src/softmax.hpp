@@ -15,8 +15,14 @@ void softmax_layer<dType>::init_loss_layer(struct neuralMT_model<precision> *mod
 	this->truncated_softmax = false;
 	this->dropout = params.dropout;
 	this->dropout_rate = params.dropout_rate;
-
+    this->p_params = &params;
+    std::cout<< "params.decode "<< params.decode<<"\n";
+    if (params.decode){
+        this->LSH_type = params.LSH_type;
+    }
+    
 	init_softmax_layer_GPU(output_vocab_size,minibatch_size,model,params.norm_clip,params.LSTM_size, clip_gradients,learning_rate,params.longest_sent);
+    
 }
 
 
@@ -320,6 +326,11 @@ template<typename dType>
 void softmax_layer<dType>::load_weights(std::ifstream &input) {
 
 	load_weights_GPU(input);
+    
+    if (this->LSH_type == 1){
+        lsh_wta = new LSH_WTA<dType>(p_params->WTA_K, p_params->WTA_units_per_band, p_params->WTA_W, p_params->WTA_m, LSTM_size, output_vocab_size, d_D, d_b_d,p_params->show_debug_info);
+    }
+
 }
 
 template<typename dType>
@@ -514,14 +525,15 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	devSynchAll();
 	#endif
 
+    dType alpha = 1;
+    dType beta = 0;
+    
+    if (this->LSH_type == 0){
 	//multiply the D matrix with the hidden state matrix
-	dType alpha = 1;
-	dType beta = 0;
 	cublasSetStream(s_layer_info.handle,s_layer_info.s0);
 	CUBLAS_ERROR_WRAPPER(cublas_gemm_wrapper(s_layer_info.handle, CUBLAS_OP_N, CUBLAS_OP_N,
 	 output_vocab_size, minibatch_size, LSTM_size, &alpha, d_D, output_vocab_size,
 	  d_h_t, LSTM_size, &beta, d_outputdist, output_vocab_size),"get_distribution cuBLAS call failed 1\n");
-
 
 	//add the bias vector to the matrix
 	int threads_per_block = 128;
@@ -529,7 +541,11 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	dim3 kernel_dim(minibatch_size,num_block,1);
 	matrix_bias_kernel<<< kernel_dim,threads_per_block,0,s_layer_info.s0 >>>(output_vocab_size,d_outputdist,d_b_d,d_outputdist);
 	CUDA_GET_LAST_ERROR();
-
+    } else {
+        devSynchAll();
+        this->lsh_wta->topm(d_outputdist, d_h_t, minibatch_size);
+    }
+    
 	//this is for decoding
 	if(BZ_CUDA::pre_norm) {
 		devSynchAll();
@@ -575,7 +591,7 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	#endif
 
 	cudaEventRecord(s_layer_info.outputdist_done,s_layer_info.s0);
-
+    
 }
 
 

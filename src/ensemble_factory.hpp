@@ -488,6 +488,13 @@ void ensemble_factory<dType>::decode_file_batch() {
 		//run the forward prop of target
 		//BZ_CUDA::logger << "Source length bi: " << models[0].source_length_bi << "\n";
 		int source_length = std::max(models[0].source_length,models[0].source_length_bi);
+        
+        
+        // prepare the target set vocabulary;
+        
+        
+        
+        
 		for(int curr_index=0; curr_index < std::min( (int)(max_decoding_ratio*source_length) , longest_sent-2 ); curr_index++) {
 			
             forward_start = std::chrono::system_clock::now();
@@ -543,6 +550,8 @@ void ensemble_factory<dType>::decode_file_batch() {
         std::cout<< "Expand: " << expand_dur.count()<<" s \n";
 
 	}
+    
+    models[0].model->timer.report();
 
 }
 

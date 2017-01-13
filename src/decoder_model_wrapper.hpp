@@ -193,8 +193,6 @@ void decoder_model_wrapper<dType>::memcpy_vocab_indicies() {
 	}
 }	
 
-
-
 template<typename dType>
 void decoder_model_wrapper<dType>::forward_prop_source() {
 	model->forward_prop_source(d_input_vocab_indicies_source,d_input_vocab_indicies_source_bi,d_ones,source_length,source_length_bi,LSTM_size,

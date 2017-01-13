@@ -2819,6 +2819,97 @@ void top_k(dType *probs, dType *results, int* dict, int dict_size) {
     
 }
 
+// for LSH
+
+// each core is responsible for one band
+// W blocks ; 256 threads per block : for loop vocab_size / 256 ;
+// <<<W, 256>>>
+template<typename dType>
+__global__
+void hash_code_kernel(unsigned int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector) {
+    // bits_per_band = log2(K) * units_per_band;
+    int band_index = blockIdx.x;
+    for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
+        unsigned int code = 0;
+        for (int u = 0 ; u < units_per_band; u ++ ){
+            dType max_val = -1000000000;
+            int max_index = -1;
+            for (int p = 0 ; p < K; p ++){
+                int dim = d_permutes[band_index * units_per_band * K + u * K + p];
+                dType val = d_vectors[dim * n_vector + vocab_index];
+                if (max_val < val){
+                    max_val = val;
+                    max_index = p;
+                }
+            }
+            code = (code << bits_per_band) + max_index;
+        }
+        int code_index =band_index * n_vector + vocab_index;
+        d_codes[code_index] = code;
+    }
+}
+
+// <<<beam_size, 256>>>
+// d_h_t_pad [beam_size, LSTM_size + 1];
+// d_h_t [LSTM_size, beam_size]
+template<typename dType>
+__global__
+void pad_h_t(dType * d_h_t_pad, dType *d_h_t, int LSTM_size, int beam_size){
+    int beam_index = blockIdx.x;
+    for (int i = threadIdx.x; i < LSTM_size + 1; i += blockDim.x){
+        if (i == LSTM_size){
+            d_h_t_pad[i * beam_size + beam_index] = 1.0;
+        } else {
+            d_h_t_pad[i * beam_size + beam_index] = d_h_t[beam_index *  LSTM_size + i];
+        }
+    }
+    
+    
+}
+
+
+// d_results : [m, batch_size]
+// d_Db : [vocab_size, LSTM_size + 1]
+// d_h_t_pad: [batch_size, LSTM_size + 1]
+// d_top_ids: [m, batch_size]
+// complexity: m * batch_size * (LSTM_size + 1)
+// <<<(m,batch_size), 256>>> 256 is required;
+// each block just calculate one single dot product;
+template<typename dType>
+__global__
+void sparse_dot_product(dType *d_outputdist, dType *d_results, dType *d_Db, dType *d_h_t_pad, int * d_top_ids, int m, int LSTM_size, int batch_size, int vocab_size){
+   
+    const int nthreads = 256;
+    __shared__ dType buffer[nthreads];
+
+    int m_index = blockIdx.x;
+    int batch_index = blockIdx.y;
+    int vocab_index = d_top_ids[batch_index * m + m_index];
+    if (vocab_index >= 0){
+        buffer[threadIdx.x] = 0.0;
+        for (int i = threadIdx.x ; i < LSTM_size + 1; i += blockDim.x){
+            buffer[threadIdx.x] += d_Db[IDX2C(vocab_index,i, vocab_size)] * d_h_t_pad[IDX2C(batch_index, i, batch_size)];
+        }
+        
+        __syncthreads();
+        
+        // reduce
+        for (int stride = nthreads /2 ; stride > 0 ; stride = stride >> 1) {
+            if (threadIdx.x < stride){
+                buffer[threadIdx.x] += buffer[threadIdx.x + stride];
+            }
+            __syncthreads();
+        }
+        __syncthreads();
+        d_results[IDX2C(m_index, batch_index, m)] = buffer[0];
+        d_outputdist[IDX2C(vocab_index, batch_index, vocab_size)] = buffer[0];
+    }
+}
+
+
+
+
+
 
 #endif
 

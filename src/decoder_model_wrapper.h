@@ -60,6 +60,7 @@ public:
 		std::string multi_src_integerized_file,int longest_sent,global_params &params);
 	void extract_model_info(std::string weights_file_name); //get how many layers, hiddenstate size, vocab sizes, etc
 	void memcpy_vocab_indicies();
+    //void prepare_target_vocab_set(int policy);
 	void forward_prop_source();
 	void forward_prop_target(int curr_index,int *h_current_indicies);
 

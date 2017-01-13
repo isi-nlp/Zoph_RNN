@@ -347,15 +347,23 @@ void get_vector_cuBLAS(dType *h_vector,dType *d_vector,int rows) {
 	CUBLAS_ERROR_WRAPPER(cublasGetVector(rows, sizeof(dType), d_vector, 1, h_vector, 1),"cuBLAS get vector failed\n");
 }
 
+// both gpu and cpu
+template<typename dType>
+void allocate_matrix_dh(dType **h_matrix,dType **d_matrix,int rows,int cols) {
+    *h_matrix = (dType * ) malloc(rows * cols * sizeof(dType));
+    CUDA_ERROR_WRAPPER(cudaMalloc((void**)d_matrix, rows * cols * sizeof(dType)),"d_matrix failed\n");
+}
+
 template<typename dType>
 void full_matrix_setup(dType **h_matrix,dType **d_matrix,int rows,int cols) {
-	allocate_Matrix_CPU(h_matrix,rows,cols);
-	initialize_Matrix(*h_matrix,rows,cols);
-	allocate_Matrix_GPU(d_matrix,rows,cols);
-	set_matrix_cuBLAS(*h_matrix,*d_matrix,rows,cols);
-
-	free(*h_matrix);
+    allocate_Matrix_CPU(h_matrix,rows,cols);
+    initialize_Matrix(*h_matrix,rows,cols);
+    allocate_Matrix_GPU(d_matrix,rows,cols);
+    set_matrix_cuBLAS(*h_matrix,*d_matrix,rows,cols);
+    
+    free(*h_matrix);
 }
+
 
 
 template<typename dType>
@@ -432,6 +440,21 @@ void print_matrix(dType *h_matrix,int rows,int cols) {
 	}
 	BZ_CUDA::logger << "\n";
 }
+
+template<typename dType>
+void print_matrix_gpu(dType *d_matrix,int rows,int cols) {
+    dType * h_matrix = (dType *)malloc(rows*cols*sizeof(dType));
+    CUDA_ERROR_WRAPPER(cudaMemcpy(h_matrix, d_matrix, rows*cols*sizeof(dType), cudaMemcpyDeviceToHost),"print_matrix_gpu");
+    for(int i=0; i<rows; i++) {
+        for(int j=0; j<cols; j++) {
+            BZ_CUDA::logger << h_matrix[IDX2C(i,j,rows)] << " ";
+        }
+        BZ_CUDA::logger << "\n";
+    }
+    BZ_CUDA::logger << "\n";
+    free(h_matrix);
+}
+
 
 
 template<typename Derived>

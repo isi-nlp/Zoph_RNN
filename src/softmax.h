@@ -8,6 +8,7 @@
 #include "softmax_node.h"
 #include "transfer_layer.h"
 #include "base_loss.h"
+#include "LSH_WTA.h"
 
 template<typename dType>
 class softmax_layer : public base_loss_layer<dType> {
@@ -124,6 +125,12 @@ public:
 
 	curandGenerator_t rand_gen;
 
+    // for LSH
+    int LSH_type = 0;
+    LSH_WTA<dType> *lsh_wta;
+    global_params * p_params; 
+    
+    
 	softmax_layer() {};
 
 	void init_loss_layer(struct neuralMT_model<precision> *model,global_params &params); 

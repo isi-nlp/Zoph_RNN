@@ -270,8 +270,15 @@ struct global_params {
     std::string encourage_weight_str = "";
     
 
-    
-    
+    // for LSH decoding
+    // 0: no LSH; 1 Winner-takes-all 
+    int LSH_type = 0;
+    // for WTA
+    int WTA_K = 8;
+    int WTA_units_per_band = 2; // log2(WTA_K) * WTA_units_per_band <= 32 (unsigned int)
+    int WTA_W = 100; // number of bands;
+    int show_debug_info = 0;
+    int WTA_m = 10;
 };
 
 

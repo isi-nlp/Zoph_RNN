@@ -18,6 +18,7 @@
 #include <limits>
 #include "Input_To_Hidden_Layer.h"
 #include "Hidden_To_Hidden_Layer.h"
+#include "memory_util.h"
 
 template<typename dType>
 class Input_To_Hidden_Layer;
@@ -117,6 +118,8 @@ public:
 	bool char_cnn = false;
 	char_cnn_params char_params;
 
+    Timer timer;
+    
 	///////////////////////////////////Methods for the class//////////////////////////////////////////////
 
 	neuralMT_model() {};

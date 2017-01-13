@@ -237,10 +237,13 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 ("encourage-weight",po::value<std::string>(&params.encourage_weight_str)->multitoken(),"The encourage weights. The weight is in log(e) space, and will be added to the corresponding word probability during decoding\nFORMAT: <weight1>,<weight2> e.g. 1.0,-0.5\n DEFAULT: ")
 ("wordlen-weight",po::value<precision>(&params.wordlen_weight),"wordlen weight\n DEFAULT: 0")
 ("alliteration-weight",po::value<precision>(&params.alliteration_weight),"alliteration weight\n DEFAULT: 0")
-    
-    
-    
-    
+    // for LSH
+    ("lsh-type",po::value<int>(&params.LSH_type),"0: no lsh; 1: WTA LSH; DEFAULT: 0")
+    ("WTA-K",po::value<int>(&params.WTA_K),"interests scope; DEFAULT: 8")
+    ("WTA-units-per-band",po::value<int>(&params.WTA_units_per_band),"units per band; DEFAULT: 2")
+    ("WTA-W",po::value<int>(&params.WTA_W),"number of bands; DEFAULT: 100")
+    ("WTA-m",po::value<int>(&params.WTA_m),"number of internal top m, not the same with beam_size; DEFAULT: 10")
+    ("show-debug-info",po::value<int>(&params.show_debug_info),"whether show LSH debug info; DEFAULT: 0")
         ;
     //   ("tsne-dump",po::value<bool>(&BZ_STATS::tsne_dump),"for dumping multi-source hiddenstates during decoding")
   		// ("Dump-LSTM",po::value<std::string>(&params.LSTM_dump_file),"Print the output at each timestep from the LSTM\nFORMAT: <output file name>\n"\
