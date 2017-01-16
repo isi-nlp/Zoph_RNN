@@ -492,7 +492,11 @@ void ensemble_factory<dType>::decode_file_batch() {
         
         // prepare the target set vocabulary;
         
-        
+        for(int j=0; j < models.size(); j++) {
+            models[j].prepare_target_vocab_set();
+            models[j].before_target_vocab_shrink();
+        }
+
         
         
 		for(int curr_index=0; curr_index < std::min( (int)(max_decoding_ratio*source_length) , longest_sent-2 ); curr_index++) {
@@ -540,7 +544,7 @@ void ensemble_factory<dType>::decode_file_batch() {
 		//output the final results of the decoder
 		ensembles_models();
 		model_decoder->finish_current_hypotheses(outputdist,BZ_CUDA::viterbi_alignments);
-		model_decoder->output_k_best_hypotheses(source_length);
+		model_decoder->output_k_best_hypotheses(source_length, models[0].h_new_vocab_index, (p_params->target_vocab_policy > 0));
 		//model_decoder->print_current_hypotheses();
         
         total_end = std::chrono::system_clock::now();
@@ -548,6 +552,14 @@ void ensemble_factory<dType>::decode_file_batch() {
         std::cout<< "Total: " << total_dur.count()<<" s \n";
         std::cout<< "Forward: " << forward_dur.count()<<" s \n";
         std::cout<< "Expand: " << expand_dur.count()<<" s \n";
+        
+        
+        // after target_vocab_shrink
+        for(int j=0; j < models.size(); j++) {
+            models[j].after_target_vocab_shrink();
+        }
+
+        
 
 	}
     

@@ -279,6 +279,21 @@ struct global_params {
     int WTA_W = 100; // number of bands;
     int show_debug_info = 0;
     int WTA_m = 10;
+    
+    // for target vocab set shrink
+    // 0 full softmax
+    // 1 top 10k
+    // 2 with alignment
+    int target_vocab_policy = 0;
+    // if 1
+    int top_vocab_size = 10;
+    // if 2
+    std::string alignment_file = "";
+    
+    // for lagecy-model
+    bool legacy_model = false;
+    
+    
 };
 
 

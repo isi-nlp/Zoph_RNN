@@ -42,7 +42,7 @@ public:
 	thrust::device_vector<dType> thrust_d_normalization;
 
 	//device pointers
-	dType *d_D;
+	dType *d_D; // declared in base class
 	dType *d_h_t;
 	dType *d_b_d;
 	dType *d_d_ERRt_ht;
@@ -106,7 +106,7 @@ public:
 	bool clip_gradients; //If true then clip gradients
 	dType norm_clip; //For gradient clipping
 	int minibatch_size;
-	int output_vocab_size;
+	int output_vocab_size; //declared in base class;
 	int LSTM_size;
 	dType learning_rate;
 	bool scaled;
@@ -130,6 +130,7 @@ public:
     LSH_WTA<dType> *lsh_wta;
     global_params * p_params; 
     
+
     
 	softmax_layer() {};
 

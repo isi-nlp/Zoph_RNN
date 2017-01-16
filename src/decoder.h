@@ -1581,7 +1581,7 @@ struct decoder {
 	}
 
 
-	void output_k_best_hypotheses(int source_length) {
+	void output_k_best_hypotheses(int source_length, int *h_new_vocab_index = NULL, bool target_vocab_shrink = false) {
 
 		std::priority_queue<k_best<dType>,std::vector<k_best<dType>>, k_best_compare_functor> best_hypoth;
 
@@ -1620,7 +1620,13 @@ struct decoder {
 				output << "-Score: " <<hypotheses[best_hypoth_temp.top().index].score << "\n";
 			}
 			for(int j=0; j<hypotheses[best_hypoth_temp.top().index].hypothesis.size(); j++) {
-				output << hypotheses[best_hypoth_temp.top().index].hypothesis(j) << " ";
+                int vocab_index =hypotheses[best_hypoth_temp.top().index].hypothesis(j);
+                if (target_vocab_shrink){
+                    int original_vocab_index = h_new_vocab_index[vocab_index];
+                    output << original_vocab_index << " ";
+                } else {
+                    output << vocab_index << " ";
+                }
 			}
             
             if (is_first)

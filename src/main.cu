@@ -244,7 +244,14 @@ void command_line_parse(global_params &params,int argc, char **argv) {
     ("WTA-W",po::value<int>(&params.WTA_W),"number of bands; DEFAULT: 100")
     ("WTA-m",po::value<int>(&params.WTA_m),"number of internal top m, not the same with beam_size; DEFAULT: 10")
     ("show-debug-info",po::value<int>(&params.show_debug_info),"whether show LSH debug info; DEFAULT: 0")
-        ;
+    // for target vocab shrink
+    ("target-vocab-shrink",po::value<int>(&params.target_vocab_policy),"0: full softmax, 1 top k vocab only, 2: using alignment; DEFAULT: 10")
+    ("top-vocab-size",po::value<int>(&params.top_vocab_size),"valid only when target-vocab-shrink==1; DEFAULT: 10")
+    // to decode legacy model
+    ("legacy-model",po::value<bool>(&params.legacy_model),"set when decoding with legacy model. If it's legacy model, it will need to have <START> as the first word in source sentence; DEFAULT: False");
+    
+    
+    
     //   ("tsne-dump",po::value<bool>(&BZ_STATS::tsne_dump),"for dumping multi-source hiddenstates during decoding")
   		// ("Dump-LSTM",po::value<std::string>(&params.LSTM_dump_file),"Print the output at each timestep from the LSTM\nFORMAT: <output file name>\n"\
   		// 	"The file lines that are output are the following: 1.input word, embedding   2.Forget gate   3.input gate"\
@@ -1062,7 +1069,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 			// 	params.longest_sent,1,false,params.LSTM_size,params.target_vocab_size,true,params.source_vocab_size);
 			for(int i=0; i<params.decode_temp_files.size(); i++) {
 				input_helper.integerize_file_kbest(params.model_names[i],params.decode_user_files[i],params.decode_temp_files[i],
-					params.longest_sent,params.target_vocab_size,false,"NULL");
+					params.longest_sent,params.target_vocab_size,false,"NULL", params.legacy_model);
 
 				if(params.decode_user_files_additional[i]!= "NULL") {
 					input_helper.integerize_file_kbest(params.model_names[i],params.decode_user_files_additional[i],params.decode_temp_files_additional[i],

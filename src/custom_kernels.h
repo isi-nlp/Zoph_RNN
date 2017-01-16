@@ -2907,6 +2907,19 @@ void sparse_dot_product(dType *d_outputdist, dType *d_results, dType *d_Db, dTyp
 }
 
 
+// for shrink the target vocab set;
+// each block for a vocab id;
+// <<<new_vocab_size, 256>>>
+template<typename dType>
+__global__
+void shrink_vocab(dType *d_D_shrink, dType *d_D, dType *d_b_shrink, dType * d_b, int *d_new_vocab_index, int new_vocab_size, int vocab_size, int LSTM_size){
+    int index = blockIdx.x;
+    int vocab_index = d_new_vocab_index[index];
+    d_b_shrink[index] = d_b[vocab_index];
+    for (int i = threadIdx.x; i < LSTM_size; i += blockDim.x){
+        d_D_shrink[IDX2C(index, i, new_vocab_size)] = d_D[IDX2C(vocab_index, i, vocab_size)];
+    }
+}
 
 
 

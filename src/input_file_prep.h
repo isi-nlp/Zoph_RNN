@@ -2968,7 +2968,7 @@ struct input_file_prep {
 	}
 
 	void integerize_file_kbest(std::string output_weights_name,std::string source_file_name,std::string tmp_output_name,
-		int max_sent_cutoff,int &target_vocab_size,bool multi_src_model,std::string multi_src_mapping_file) 
+		int max_sent_cutoff,int &target_vocab_size,bool multi_src_model,std::string multi_src_mapping_file, bool legacy_model = false)
 	{
 		data.clear();
 		int VISUAL_num_source_word_tokens =0;
@@ -3105,6 +3105,9 @@ struct input_file_prep {
 			}
 			data[i].src_sent.clear();
 			data[i].src_sent_int= src_int;
+            if(legacy_model) {
+                data[i].src_sent_int.insert(data[i].src_sent_int.begin(),0);
+            }
 		}
 
 
