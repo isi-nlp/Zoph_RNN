@@ -1654,7 +1654,6 @@ int main(int argc, char **argv) {
 	///////////////////////////////////////////decode the model////////////////////////////////////////////
 	if(params.decode) {
 		//std::cout << "-----------------Starting Decoding----------------\n";
-		begin_decoding = std::chrono::system_clock::now();
 		ensemble_factory<precision> ensemble_decode(params.model_names,params.num_hypotheses,params.beam_size, params.min_decoding_ratio,
 			params.penalty, params.longest_sent,params.print_score,
 			params.decoder_output_file,params.gpu_indicies,params.max_decoding_ratio,
@@ -1678,6 +1677,8 @@ int main(int argc, char **argv) {
             ensemble_decode.model_decoder->init_encourage_lists(params.encourage_list, params.encourage_weight);
             
         }
+        
+        begin_decoding = std::chrono::system_clock::now();
 
 		BZ_CUDA::logger << "-----------------Starting Decoding----------------\n";
 		ensemble_decode.decode_file();
