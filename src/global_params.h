@@ -289,7 +289,7 @@ struct global_params {
     int top_vocab_size = 10;
     // if 2
     std::string alignment_file = "";
-    
+    int target_vocab_cap = 1;
     // for lagecy-model
     bool legacy_model = false;
     

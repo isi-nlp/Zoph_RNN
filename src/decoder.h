@@ -257,6 +257,10 @@ struct decoder {
 	//GPU
 	int *h_current_indices;
 	int *d_current_indices;
+    
+    // for vocab_shrink_2
+    int *h_current_indices_original;
+    int target_vocab_policy = 0;
 
     dType *h_outputdist; // [vocab_size, beam_size] point to models[0].h_outputdist;
     dType *d_outputdist; // need to allocate;
@@ -406,7 +410,11 @@ struct decoder {
             streams.push_back(stream);
         }
         
-        
+        // for target_vocab_shrink_policy
+        this->target_vocab_policy = params.target_vocab_policy;
+        if (this->target_vocab_policy == 2){
+            this->h_current_indices_original = (int*) malloc(beam_size * sizeof(int));
+        }
         
     }
     
@@ -451,6 +459,10 @@ struct decoder {
         //for streams
         for (int i=0; i < std::max(beam_size,10); i++){
             cudaStreamDestroy(streams[i]);
+        }
+        
+        if (this->target_vocab_policy == 2){
+            free(h_current_indices_original);
         }
 
         

@@ -65,6 +65,11 @@ public:
     // for policy 1
     bool show_shrink_debug = false;
     bool policy_1_done = false;
+    // for policy 2
+    int *h_alignments; // [cap+1, source_vocab_size]
+    int *d_alignments;
+    int cap = 0;
+    
     global_params * p_params;
     
     

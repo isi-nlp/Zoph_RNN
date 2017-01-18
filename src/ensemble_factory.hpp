@@ -451,15 +451,8 @@ void ensemble_factory<dType>::decode_file_batch() {
 	
 	for(int i = 0; i < num_lines_in_file; i++) {
         
-        //timing staff
-        std::chrono::time_point<std::chrono::system_clock> total_start, total_end, forward_start, forward_end, expand_start, expand_end;
+        models[0].model->timer.start("total");
         
-        total_start= std::chrono::system_clock::now();
-        std::chrono::duration<double> total_dur, forward_dur, expand_dur;
-        
-        forward_dur = std::chrono::duration<double>::zero();
-        expand_dur = std::chrono::duration<double>::zero();
-
         
 		BZ_CUDA::logger << "Decoding sentence: " << i << " out of " << num_lines_in_file << "\n";
 		//fileh->read_sentence(); //read sentence from file
@@ -474,10 +467,15 @@ void ensemble_factory<dType>::decode_file_batch() {
 
 		//init decoder
 		model_decoder->init_decoder();
+        
+        models[0].model->timer.start("forward_source");
 		//run forward prop on the source
 		for(int j=0; j < models.size(); j++) {
 			models[j].forward_prop_source();
 		}
+        
+        models[0].model->timer.end("forward_source");
+        
 		int last_index = 0;
 
 		//for dumping hidden states we can just return
@@ -492,24 +490,41 @@ void ensemble_factory<dType>::decode_file_batch() {
         
         // prepare the target set vocabulary;
         
+        models[0].model->timer.start("shrink_target_vocab");
+        
         for(int j=0; j < models.size(); j++) {
             models[j].prepare_target_vocab_set();
             models[j].before_target_vocab_shrink();
         }
 
+        models[0].model->timer.end("shrink_target_vocab");
         
         
 		for(int curr_index=0; curr_index < std::min( (int)(max_decoding_ratio*source_length) , longest_sent-2 ); curr_index++) {
-			
-            forward_start = std::chrono::system_clock::now();
-            
-			for(int j=0; j < models.size(); j++) {
-				models[j].forward_prop_target(curr_index,model_decoder->h_current_indices);
-				//now take the viterbi alignments
-			}
 
-            forward_end = std::chrono::system_clock::now();
-            forward_dur += forward_end - forward_start;
+            
+            models[0].model->timer.start("forward_target");
+            if (p_params->target_vocab_policy == 2){
+                // mapping current indicies
+                for (int i = 0; i<models[0].beam_size; i++){
+                    int mapped_index = model_decoder->h_current_indices[i];
+                    model_decoder->h_current_indices_original[i] = models[0].h_new_vocab_index[mapped_index];
+                }
+                for(int j=0; j < models.size(); j++) {
+                    // do current d
+                    models[j].forward_prop_target(curr_index,model_decoder->h_current_indices_original);
+                    //now take the viterbi alignments
+                }
+                
+            } else {
+                
+                for(int j=0; j < models.size(); j++) {
+                    // do current d
+                    models[j].forward_prop_target(curr_index,model_decoder->h_current_indices);
+                    //now take the viterbi alignments
+                }
+            }
+            models[0].model->timer.end("forward_target");
 
 			//now ensemble the models together
 			//this also does voting for unk-replacement
@@ -518,14 +533,13 @@ void ensemble_factory<dType>::decode_file_batch() {
             
 			ensembles_models();
 
-            expand_start = std::chrono::system_clock::now();
-
+            models[0].model->timer.start("expand");
+            
             
 			//run decoder for this iteration
 			model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
 
-            expand_end = std::chrono::system_clock::now();
-            expand_dur += expand_end - expand_start;
+            models[0].model->timer.end("expand");
             
 			//swap the decoding states
 			for(int j=0; j<models.size(); j++) {
@@ -547,19 +561,12 @@ void ensemble_factory<dType>::decode_file_batch() {
 		model_decoder->output_k_best_hypotheses(source_length, models[0].h_new_vocab_index, (p_params->target_vocab_policy > 0));
 		//model_decoder->print_current_hypotheses();
         
-        total_end = std::chrono::system_clock::now();
-        total_dur = total_end - total_start;
-        std::cout<< "Total: " << total_dur.count()<<" s \n";
-        std::cout<< "Forward: " << forward_dur.count()<<" s \n";
-        std::cout<< "Expand: " << expand_dur.count()<<" s \n";
-        
-        
         // after target_vocab_shrink
         for(int j=0; j < models.size(); j++) {
             models[j].after_target_vocab_shrink();
         }
 
-        
+        models[0].model->timer.end("total");
 
 	}
     

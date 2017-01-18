@@ -247,6 +247,8 @@ void command_line_parse(global_params &params,int argc, char **argv) {
     // for target vocab shrink
     ("target-vocab-shrink",po::value<int>(&params.target_vocab_policy),"0: full softmax, 1 top k vocab only, 2: using alignment; DEFAULT: 10")
     ("top-vocab-size",po::value<int>(&params.top_vocab_size),"valid only when target-vocab-shrink==1; DEFAULT: 10")
+    ("target-vocab-cap",po::value<int>(&params.target_vocab_cap),"when target-vocab-shrink == 2, the cap value; DEFAULT: 1")
+    ("f2e-file",po::value<std::string>(&params.alignment_file),"when target-vocab-shrink == 2, the alignment file; DEFAULT: 1")
     // to decode legacy model
     ("legacy-model",po::value<bool>(&params.legacy_model),"set when decoding with legacy model. If it's legacy model, it will need to have <START> as the first word in source sentence; DEFAULT: False");
     

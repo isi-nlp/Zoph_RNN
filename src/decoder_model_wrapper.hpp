@@ -87,11 +87,39 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
     CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_D_shrink,LSTM_size*target_vocab_size*sizeof(dType)),"d_D_shrink,GPU memory allocation failed\n");
 
     CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_b_shrink,target_vocab_size*sizeof(dType)),"d_b_shrink,GPU memory allocation failed\n");
-
     
     h_new_vocab_index = (int *)malloc(target_vocab_size*sizeof(int));
     CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_new_vocab_index,target_vocab_size*sizeof(int)),"d_new_vocab_index,GPU memory allocation failed\n");
-    
+
+    if (p_params->target_vocab_policy == 2)
+    {
+        this->cap = p_params->target_vocab_cap;
+        h_alignments = (int *)malloc(source_vocab_size*(cap+1)*sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_alignments,source_vocab_size*(cap+1)*sizeof(int)),"d_alignmets,GPU memory allocation failed\n");
+        for (int i = 0; i < source_vocab_size; i +=1){
+            h_alignments[i*(cap+1)] = -1;
+        }
+        std::string line;
+        std::ifstream infile(p_params->alignment_file.c_str());
+        while (std::getline(infile, line)){
+            std::vector<std::string> ll = split(line,' ');
+
+            if (ll.size() > cap+1) {
+                std::cout << "ll size exceed: "<<cap<< " " << ll.size()<<"\n";
+            }
+
+            int source_index = std::stoi(ll[0]);
+            for (int i = 1; i < ll.size(); i ++){
+                int target_index = std::stoi(ll[i]);
+                h_alignments[source_index * (cap+1) + i-1] = target_index;
+            }
+            h_alignments[source_index * (cap+1) + ll.size()-1] = -1;
+        }
+        
+        //CUDA_ERROR_WRAPPER(cudaMemcpy(d_alignments,h_alignments,source_vocab_size*(cap+1)*sizeof(int),cudaMemcpyHostToDevice),"h_alignemnts to d_alignments");
+        
+        
+    }
     
 }
 
@@ -243,20 +271,63 @@ void decoder_model_wrapper<dType>::prepare_target_vocab_set(){
                 print_matrix_gpu(d_D_shrink, topn, LSTM_size);
                 
                 std::cout << "d_b_shrink : \n";
-                print_matrix_gpu(d_b_shrink,1, topn);
+                print_matrix_gpu(d_b_shrink, 1, topn);
                 
             }
         }
         
     } else if (p_params->target_vocab_policy == 2){ // alignment
+        std::unordered_set<int> target_vocabs;
+        std::unordered_set<int> source_vocabs;
         
+        // for <START> <EOF> <UNK>
+        h_new_vocab_index[0] = 0;
+        h_new_vocab_index[1] = 1;
+        h_new_vocab_index[2] = 2;
+        int k = 3;
+        
+        
+        for (int i = 0 ; i < fileh->sentence_length; i ++){
+            int word_index = fileh->h_input_vocab_indicies_source[i];
+            int j = 0;
+            //std::cout<<"source_index "<<word_index<<"\n";
+            if (source_vocabs.count(word_index) > 0){
+                continue;
+            }
+            source_vocabs.insert(word_index);
+            while (true){
+                int target_index = h_alignments[word_index*(cap+1) + j];
+                if (target_index == -1) {
+                    break;
+                }
+                if (target_vocabs.count(target_index) == 0){
+                    h_new_vocab_index[k] = target_index;
+                    target_vocabs.insert(target_index);
+                    //std::cout <<"("<<k<<"," <<target_index << ") ";
+                    k+=1;
+                }
+                j+=1;
+            }
+            //std::cout<< "\n";
+        }
+        this->new_output_vocab_size = k;
+        std::cout<<"new_output_vocab_size: "<< new_output_vocab_size << "\n";
+        
+        softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_new_vocab_index,h_new_vocab_index,this->new_output_vocab_size*sizeof(int),cudaMemcpyHostToDevice),"h_new_vocab_index to d_new_vocab_index");
+        
+        shrink_vocab<<<this->new_output_vocab_size, 256>>>(d_D_shrink, softmax->d_D, d_b_shrink, softmax->d_b_d,d_new_vocab_index, this->new_output_vocab_size, target_vocab_size, LSTM_size);
+        CUDA_GET_LAST_ERROR("shrink_vocab_index");
+        
+        outputdist.resize(this->new_output_vocab_size,beam_size);
     }
 }
 
 template<typename dType>
 void decoder_model_wrapper<dType>::before_target_vocab_shrink(){
     //
-    if (p_params->target_vocab_policy == 1){
+    if (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2){
         
         softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
         
@@ -273,7 +344,7 @@ void decoder_model_wrapper<dType>::before_target_vocab_shrink(){
 template<typename dType>
 void decoder_model_wrapper<dType>::after_target_vocab_shrink(){
     // reset the parameters;
-    if (p_params->target_vocab_policy == 1){
+    if (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2){
         if (show_shrink_debug){
             std::cout << "outputdist\n";
             print_eigen_matrix(outputdist);
