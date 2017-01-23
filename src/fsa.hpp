@@ -12,7 +12,7 @@ state::state(const state& s)
     this->name = s.name;
     //this->links = s.links;
     this->weights = s.weights;
-
+    this->h_dict = s.h_dict;
     this->next_word_index_set = s.next_word_index_set;
     this->next_word_index_set_ready = s.next_word_index_set_ready;
 }
@@ -24,7 +24,7 @@ state::state(std::string name){
     //this->links = new std::unordered_map<std::string,std::unordered_set<state> >();
     //this->weights = new std::unordered_map<std::string,std::unordered_map<state,float> >();
     this->weights = new std::unordered_map<int,std::unordered_map<std::string, std::pair<state*,float> > >();
-
+    this->h_dict = NULL;
     this->next_word_index_set = new std::unordered_set<int>();
     this->next_word_index_set_ready = false;
 }
@@ -82,6 +82,7 @@ std::unordered_set<int>* state::next_word_indicies() {
         }
         
         this->h_dict = (int *)malloc(this->next_word_index_set->size()*1*sizeof(int));
+        //std::cout<<this->name << " " << this->h_dict << " " << this->next_word_index_set->size() <<"\n";
         //CUDA_ERROR_WRAPPER(cudaHostRegister(this->h_dict, this->next_word_index_set->size()*1*sizeof(int), cudaHostRegisterPortable),"h_dict in fsa.hpp pinned memeory error!");
         int i = 0;
         for (int index : *(this->next_word_index_set)){

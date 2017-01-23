@@ -243,10 +243,9 @@ struct decoder {
     
     
     //for repeat_penalty
-    bool penalize_repeat = false;
+    bool penalize_repeat = true; // always true, but controlled by the weights;
     precision repeat_penalty = 0.0;
     float interactive_repeat_penalty;
-    bool penalize_adjacent_repeat = false;
     precision adjacent_repeat_penalty = 0.0;
     std::vector<std::unordered_map<int,int>> sentence_sets;
     std::vector<std::unordered_map<int,int>> temp_sentence_sets;
@@ -336,17 +335,10 @@ struct decoder {
 		cudaMalloc((void**)&d_current_indices,beam_size*1*sizeof(int));//put void**
 
         // repeat_penalty
-        if (repeat_penalty != 0.0){
-            penalize_repeat = true;
-            for (int i = 0; i<beam_size; i++){
-                std::unordered_map<int,int>* sentence_set = new std::unordered_map<int,int>();
-                sentence_sets.push_back(*sentence_set);
-                temp_sentence_sets.push_back(*sentence_set);
-            }
-        }
-        // adjacent_repeat_penalty
-        if (adjacent_repeat_penalty != 0.0){
-            penalize_adjacent_repeat = true;
+        for (int i = 0; i<beam_size; i++){
+            std::unordered_map<int,int>* sentence_set = new std::unordered_map<int,int>();
+            sentence_sets.push_back(*sentence_set);
+            temp_sentence_sets.push_back(*sentence_set);
         }
         
         // fsa
@@ -470,6 +462,13 @@ struct decoder {
     // for encourage list
     
     void init_encourage_lists(std::vector<std::string> fns, std::vector<float> weights){
+
+        // even though len(fns) == 0, we still init h_encourage and d_encourage;
+        
+        for (int i = 0; i < vocab_size; i ++ ){
+            h_encourage[i] = 0.0;
+        }
+
         for (int i = 0; i< fns.size(); i++){
             std::string encourage_file = fns[i];
             float weight = weights[i];
@@ -489,10 +488,6 @@ struct decoder {
     }
     
     void init_encourage_list(std::string fn, float weight){
-        
-        for (int i = 0; i < vocab_size; i ++ ){
-            h_encourage[i] = 0.0;
-        }
         
         // should call after init_fsa();
         if (fn == ""){
@@ -810,54 +805,7 @@ struct decoder {
             }
         }
         
-        if (false){  // cpu_expand
-            
-            if(index==0) {
-                cols = 1;
-            }
-            
-            this->invalid_number = 0;
-            empty_queue_global();
-            
-            ///timer.start("for_loop_1");
-            
-            for(int i=0; i<cols; i++) {
-                
-                int symbol = this->current_indices(i);
-                if (symbol == this->invalid_symbol){
-                    break;
-                }
-                
-                ///timer.start("expand_pq");
-                this->expand_pq(pq,pq_set,outputDist,i,viterbi_alignments);
-                ///timer.end("expand_pq");
-                
-                ///timer.start("global_pq");
-                
-                //Now have the top elements
-                while(!pq.empty()) {
-                    dec_obj<dType> temp = pq.top();
-                    pq.pop();
-                    dec_global_obj<dType> dgobj =  dec_global_obj<dType>(-temp.val + top_sentences_scores(i),i,temp.vocab_index, temp.viterbi_alignment);
-                    dgobj.s = temp.s;
-                    dgobj.score = temp.score + top_sentences_scores(i);
-                    
-                    if (merge_state){
-                        if (pq_global_set.count(dgobj) == 0){
-                            pq_global.push(dgobj);
-                            pq_global_set.insert(dgobj);
-                        }
-                    }
-                    else {
-                        pq_global.push( dgobj );
-                    }
-                }
-                ///timer.end("global_pq");
-            }
-            
-            ///timer.end("for_loop_1");
-        }
-        // filter the pq_global
+                // filter the pq_global
         // so that dec_global_obj in pq_global has unique (history, vocab_index, state.name)
         // this is necessary: if two dec_global_obj have the same (history, vocab_index, state.name)
         // then they will have the same future, but different history. If we don't merge this, the whole beam will be occuped by
@@ -1060,6 +1008,7 @@ struct decoder {
         
         //cudaProfilerStart();
         ///timer.start("gpusort_loop");
+        
         // transfer d_dict;
         int total_valid_size = 0;
         for(int i=0; i<cols; i++) {
@@ -1106,6 +1055,7 @@ struct decoder {
         
         // add_features;
         add_features<<<cols, 256>>>(d_outputdist, d_sentence_scores, d_encourage, d_current_indices, adjacent_repeat_penalty, d_wordlen, wordlen_weight, d_vocab_bin, alliteration_weight, beam_size, vocab_size);
+
         
         //prepare sentence_sets
         int sentence_set_size = 0;
@@ -1130,6 +1080,7 @@ struct decoder {
             // add_feature_repeat;
             add_feature_repeat<<<std::min(256,(sentence_set_size + 256 - 1)/256),256>>>(d_outputdist, d_sentence_set, repeat_penalty + interactive_repeat_penalty, sentence_set_size, vocab_size);
         }
+        
         
         // prepare valid_vocab_sizes;
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_valid_vocab_sizes, h_valid_vocab_sizes,
@@ -1235,147 +1186,6 @@ struct decoder {
         
     }
     
-    template<typename Derived>
-    void expand_pq(std::priority_queue<dec_obj<dType>,std::vector<dec_obj<dType>>, pq_compare_functor>& pq,     std::unordered_set<dec_obj<dType>>& pq_set,
-                   const Eigen::MatrixBase<Derived> &outputDist, int beam_index, std::vector<int> &viterbi_alignments){
-        
-        // 0.18s || 0.12
-        empty_queue_pq(pq,pq_set);
-        
-        state* istate = this->current_states[beam_index];
-        
-        int nprune = 0;
-        int n = 0;
-        int nrows = outputDist.rows();
-        
-        
-        ///timer.start("next_word_indicies");
-        // 0.005s
-        std::unordered_set<int>* next_indicies = istate->next_word_indicies();
-        ///timer.end("next_word_indicies");
-        
-        for (auto const & j : *(next_indicies)){
-            if (j == -1 || j>= nrows) {continue;}
-            
-            dType base_score = std::log(outputDist(j,beam_index));
-            
-            ///timer.start("encourage"); //
-            if (encourage){
-                if (this->encourage_list->count(j) > 0){
-                    base_score += (*(this->encourage_list))[j];
-                }
-            }
-            ///timer.end("encourage");
-            
-            ///timer.start("penalize_repeat");
-            if (penalize_repeat){
-                if ((sentence_sets[beam_index]).count(j) > 0){
-                    //BZ_CUDA::logger<<"Beam: "<<i<<" Repeat: "<<j<<" "<<base_score;
-                    base_score += sentence_sets[beam_index][j] * (repeat_penalty + interactive_repeat_penalty);
-                    //BZ_CUDA::logger<<" "<<base_score<<"\n";
-                }
-            }
-            
-            ///timer.end("penalize_repeat");
-            
-            ///timer.start("adjacent_repeat");
-            if (penalize_adjacent_repeat){
-                if (this->current_indices(beam_index) == j){
-                    base_score += adjacent_repeat_penalty;
-                }
-            }
-            ///timer.end("adjacent_repeat");
-            
-            
-            ///timer.start("lookup words");
-            std::string word_current = fsa_model->index2words[this->current_indices(beam_index)];
-            std::string word_next = fsa_model->index2words[j];
-            ///timer.end("lookup words");
-            
-            ///timer.start("alliteration_weighs");
-
-            // alliteration_weight;
-            if (word_current[0] == word_next[0]){
-                base_score += alliteration_weight;
-            }
-            ///timer.end("alliteration_weighs");
-
-            ///timer.start("wordlen");
-
-            // wordlen_weight;
-            base_score += wordlen_weight * word_next.size() * word_next.size();
-            ///timer.end("wordlen");
-            
-            n += 1;
-            if (fsa_can_prune){
-                if (pq.size() >= beam_size){
-                    dType upper_bound = base_score;
-                    if ( - upper_bound > pq.top().val){
-                        nprune += 1;
-                        continue;
-                    }
-                }
-            }
-            
-            
-            ///timer.start("next_states");
-            //0.008s
-            std::vector<sw> sws;
-            this->fsa_model->next_states(istate,j,sws);
-            
-            ///timer.end("next_states");
-            
-            ///timer.start("sws_loop");
-            //0.01s
-            for (auto const & s:sws){
-                dType score = base_score;
-                dType fsa_score = 0.0;
-                fsa_score = this->fsa_weight * s.weight;
-                score += fsa_score;
-                
-                
-                
-                if(pq.size() < beam_size ) {
-                    dec_obj<dType> dobj = dec_obj<dType>(-score,j, viterbi_alignments[beam_index] );
-                    dobj.score = score;
-                    dobj.s = s.s;
-                    
-                    if (merge_state){
-                        if (pq_set.count(dobj) == 0){
-                            pq.push(dobj);
-                            pq_set.insert(dobj);
-                        }
-                    }
-                    else {
-                        pq.push( dobj );
-                    }
-                }
-                else {
-                    if(-score < pq.top().val) {
-                        pq.pop();
-                        dec_obj<dType> dobj = dec_obj<dType>(-score,j, viterbi_alignments[beam_index] );
-                        dobj.score = score;
-                        dobj.s = s.s;
-                        
-                        if (merge_state){
-                            if (pq_set.count(dobj) == 0){
-                                pq.push(dobj);
-                                pq_set.insert(dobj);
-                            }
-                        }
-                        else {
-                            pq.push( dobj );
-                        }
-                    }
-                }
-            }
-            ///timer.end("sws_loop");
-
-        }
-        
-        std::cout<<beam_index<<" "<< nprune << "/" << n << "\n";
-        
-    }
 
     
 	template<typename Derived>

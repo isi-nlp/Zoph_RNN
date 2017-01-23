@@ -549,6 +549,12 @@ void ensemble_factory<dType>::decode_file_batch() {
 
 			//for the scores of the last hypothesis
 			last_index = curr_index;
+            
+            if (model_decoder->invalid_number == model_decoder->beam_size){
+                break;
+            }
+
+            
 		}
 
 		//now run one last iteration

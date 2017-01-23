@@ -34,7 +34,7 @@ public:
     bool next_word_index_set_ready;
     
     state(){}
-    
+        
     // copy 
     state(const state &s);
 
@@ -57,6 +57,7 @@ public:
         this->weights = other.weights;
         this->next_word_index_set = other.next_word_index_set;
         this->next_word_index_set_ready = other.next_word_index_set_ready;
+        this->h_dict = other.h_dict;
         return *this;
     }
     
@@ -97,9 +98,15 @@ public:
     ~fsa(){
         for (auto &item: states){
             state *s = item.second;
+            //std::cout<<item.first<< " " << s->h_dict <<"\n";
             delete s->weights;
             delete s->next_word_index_set;
-            free(s->h_dict);
+            
+            
+            if (s->h_dict != NULL){
+                free(s->h_dict);
+            }
+
             delete s;
         }
     }
