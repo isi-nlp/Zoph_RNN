@@ -196,11 +196,6 @@ struct decoder {
     float alliteration_weight = 0.0;
     float wordlen_weight = 0.0;
     
-    // for encourage list
-    bool encourage = false;
-    std::unordered_map<int,float> *encourage_list = NULL;
-    //float encourage_weight = 0;
-    
     std::unordered_map<std::string,int> tgt_mapping;
     
     std::vector<state*> current_states;
@@ -472,11 +467,8 @@ struct decoder {
         for (int i = 0; i< fns.size(); i++){
             std::string encourage_file = fns[i];
             float weight = weights[i];
-            if (i == 0){
-                this->init_encourage_list(encourage_file, weight);
-            } else {
-                this->init_encourage_list_additional(encourage_file, weight);
-            }
+            this->init_encourage_list(encourage_file, weight);
+            
         }
         
         CUDA_ERROR_WRAPPER(cudaMemcpy(d_encourage, h_encourage,
@@ -490,66 +482,34 @@ struct decoder {
     void init_encourage_list(std::string fn, float weight){
         
         // should call after init_fsa();
-        if (fn == ""){
-            encourage = false;
-            //encourage_weight = 0;
-            if (this->encourage_list != NULL){
-                delete this->encourage_list;
-                this->encourage_list = NULL;
-            }
-            return;
-        }
-
-        encourage = true;
-        //encourage_weight = weight;
-        if (this->encourage_list != NULL){
-            delete this->encourage_list;
-        }
-        this->encourage_list = new std::unordered_map<int,float>();
-        
         std::ifstream fin(fn.c_str());
         std::string line;
+        int n_nounk = 0;
         while(std::getline(fin,line)){
+            
+            std::vector<std::string> ll = split(line,' ');
+            float i_weight = 1.0;
+            std::string word = ll[0];
+            if (ll.size() == 2){
+                i_weight = std::stof(ll[1]);
+            }
             int index = 2 ; // <UNK>
-            if (this->tgt_mapping.count(line) > 0){
-                index = this->tgt_mapping[line];
+            if (this->tgt_mapping.count(word) > 0){
+                index = this->tgt_mapping[word];
             }
+            
             if (index != 2){
-                (*(this->encourage_list))[index] = weight;
-                h_encourage[index] = weight;
-            }
-        }
-        fin.close();
-        
-        BZ_CUDA::logger<< "Encourage Weight: " << weight <<"\n";
-        BZ_CUDA::logger<< "Encourage List Size: " <<(int)(encourage_list->size()) <<"\n";
-    }
-    
-    void init_encourage_list_additional(std::string fn, float weight){
-        // if there's more than one encourage list, use this function to init the encourage_lists except the first one.
-        std::ifstream fin(fn.c_str());
-        std::string line;
-        while(std::getline(fin,line)){
-            int index = 2 ; // <UNK>
-            if (this->tgt_mapping.count(line) > 0){
-                index = this->tgt_mapping[line];
-            }
-            if (index != 2){
-                if (this->encourage_list->count(index) == 0){
-                    (*(this->encourage_list))[index] = weight;
-                } else {
-                    (*(this->encourage_list))[index] += weight;
-                }
-                h_encourage[index] += weight;
+                //std::cout << word << " " << index << " " << i_weight << "\n";
+                h_encourage[index] += weight * i_weight;
+                n_nounk += 1;
             }
             
         }
         fin.close();
-        BZ_CUDA::logger<< "Encourage Weight: "<< weight <<"\n";
-        BZ_CUDA::logger<< "Encourage List Size: "<<(int)(encourage_list->size())<<"\n";
         
+        BZ_CUDA::logger<< "Encourage Weight: " << weight <<"\n";
+        BZ_CUDA::logger<< "Encourage List Size: " << n_nounk <<"\n";
     }
-    
     
     // for single fsa file
     void init_fsa_inner(global_params &params){

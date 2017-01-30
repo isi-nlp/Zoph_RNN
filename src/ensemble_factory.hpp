@@ -53,11 +53,12 @@ ensemble_factory<dType>::ensemble_factory(std::vector<std::string> weight_file_n
 
 template<typename dType>
 void ensemble_factory<dType>::decode_file() {
-
     if (this->interactive){
-        decode_file_interactive();
-    } else if (this->interactive_line){
-        decode_file_interactive_line();
+        if (this->interactive_line){
+            decode_file_interactive_line();
+        } else {
+            decode_file_interactive();
+        }
     } else {
         decode_file_batch();
     }
@@ -106,7 +107,7 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             
             input_file_prep input_helper;
             input_helper.integerize_file_kbest(p_params->model_names[0],source_file,p_params->decode_temp_files[0],
-                                               p_params->longest_sent,p_params->target_vocab_size,false,"NULL");
+                                               p_params->longest_sent,p_params->target_vocab_size,false,"NULL", p_params->legacy_model);
             
             int num_lines_in_file = 1;
             
@@ -274,7 +275,7 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
     //run the forward prop of target
     for(int curr_index=0; curr_index < std::min( (int)(max_decoding_ratio*models[0].fileh->sentence_length) , longest_sent-2 ); curr_index++) {
         
-        std::cout << "WI:" << model_decoder->h_current_indices[0]<<"\n";
+        //std::cout << "WI:" << model_decoder->h_current_indices[0]<<"\n";
 
         for(int j=0; j < models.size(); j++) {
             // curr_index: whether it's 0 or non-0. Doesn't matter if it's 1 or 2 or 3.
@@ -391,7 +392,7 @@ void ensemble_factory<dType>::decode_file_interactive() {
         //
         input_file_prep input_helper;
         input_helper.integerize_file_kbest(p_params->model_names[0],source_file,p_params->decode_temp_files[0],
-                                           p_params->longest_sent,p_params->target_vocab_size,false,"NULL");
+                                           p_params->longest_sent,p_params->target_vocab_size,false,"NULL", p_params->legacy_model);
         
         int num_lines_in_file = 1;
         
@@ -577,6 +578,7 @@ void ensemble_factory<dType>::decode_file_batch() {
 	}
     
     models[0].model->timer.report();
+    models[0].model->timer.clear();
 
 }
 
