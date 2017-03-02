@@ -66,6 +66,8 @@ public:
     bool show_debug_info = false;
     bool show_debug_info_2 = false;
     
+    int calltime = 0;
+    
     
     boost::random::mt19937 gen;
     boost::uniform_int<> zero_to_d;
@@ -332,7 +334,7 @@ public:
         // prepare d_h_t_pad
         pad_h_t<<<batch_size, std::min(256, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
         CUDA_GET_LAST_ERROR("pad_h_t");
-
+        
         
         
         //create hash_code for d_h_t_pad
@@ -351,12 +353,31 @@ public:
         cuckoo_lookup<<<batch_size, std::min(256,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
         CUDA_GET_LAST_ERROR("cuckoo_lookup");
 
-        
+        calltime += 1;
+        if (calltime == -1){
+            std::ofstream o_outputdist("d_outputdist_input.txt");
+            write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
+            o_outputdist.close();
+            
+            std::ofstream o_db("d_Db_input.txt");
+            write_matrix_GPU(d_Db,vocab_size,LSTM_size+1,o_db);
+            o_db.close();
+            
+            std::ofstream o_ht_pad("d_ht_pad_input.txt");
+            write_matrix_GPU(d_Db,batch_size,LSTM_size+1,o_ht_pad);
+            o_ht_pad.close();
+        }
 
         // do sparse matrix multiplication
         sparse_dot_product_2<<<dim3(vocab_size, batch_size),256>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
         
         CUDA_GET_LAST_ERROR("sparse_dot_product_2");
+        
+        if (calltime == -1) {
+            std::ofstream o_outputdist("d_outputdist_output.txt");
+            write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
+            o_outputdist.close();
+        }
         
         
         if (show_debug_info_2){
@@ -364,6 +385,7 @@ public:
             print_matrix_gpu(d_h_t_pad_codes, batch_size, this->W);
             std::cout<<"d_outputdist\n";
             print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
+            
         }
         
     }

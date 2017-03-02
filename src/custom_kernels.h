@@ -2914,14 +2914,21 @@ void sparse_dot_product(dType *d_outputdist, dType *d_results, dType *d_Db, dTyp
 template<typename dType>
 __global__
 void sparse_dot_product_2(dType *d_outputdist, dType *d_Db, dType *d_h_t_pad, int LSTM_size, int batch_size, int vocab_size){
-    
+
+    const int nthreads = 256;
+    __shared__ dType buffer[nthreads];
+    __shared__ dType flag;
     
     int vocab_index = blockIdx.x;
     int batch_index = blockIdx.y;
     
-    if (d_outputdist[IDX2C(vocab_index, batch_index, vocab_size)] > 0){
-        const int nthreads = 256;
-        __shared__ dType buffer[nthreads];
+    if (threadIdx.x == 0){
+        flag = d_outputdist[IDX2C(vocab_index, batch_index, vocab_size)];
+    }
+    
+    __syncthreads();
+    
+    if (flag > 0){
 
         buffer[threadIdx.x] = 0.0;
         for (int i = threadIdx.x ; i < LSTM_size + 1; i += blockDim.x){
