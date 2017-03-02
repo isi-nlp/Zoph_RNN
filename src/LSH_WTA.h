@@ -32,14 +32,36 @@ public:
     int m = 10;
     int LSTM_size = 1000;
     int vocab_size = 1000;
+    int batch_size = 10;
     const dType NEG_FILL= -1000.0;
     // all matrix is column major
     int *d_permutes; // [K, P]
     int *h_permutes;
-    //int *d_dict; //[W, vocab_size]
     unsigned int *d_bands; // [vocab_size, W]
     unsigned int *h_bands;
     dType *d_Db; // [vocab_size, LSTM_size + 1]
+    dType *d_h_t_pad; // [batch_size, LSTM_size + 1]
+    unsigned int *d_h_t_pad_codes; // [beam_size, W]
+
+    unsigned int *h_bands_index; // [vocab_size, W]
+    unsigned int *d_bands_index; // [vocab_size, W]
+    
+    unsigned int *h_key_1; // [vocab_size, W]
+    unsigned int *h_value_1; // [vocab_size, W]  record the starts
+    unsigned int *h_length_1; // [vocab_size, W]  record the starts
+    
+    unsigned int *h_key_2; // [vocab_size, W]
+    unsigned int *h_value_2; // [vocab_size, W]  record the starts
+    unsigned int *h_length_2; // [vocab_size, W]  record the starts
+    
+    unsigned int *d_key_1; // [vocab_size, W]
+    unsigned int *d_value_1; // [vocab_size, W]  record the starts
+    unsigned int *d_length_1; // [vocab_size, W]  record the starts
+    
+    unsigned int *d_key_2; // [vocab_size, W]
+    unsigned int *d_value_2; // [vocab_size, W]  record the starts
+    unsigned int *d_length_2; // [vocab_size, W]  record the starts
+    
     Timer timer;
     bool show_debug_info = false;
     bool show_debug_info_2 = false;
@@ -49,10 +71,40 @@ public:
     boost::uniform_int<> zero_to_d;
     boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> > * dice;
 
+    unsigned int hash_func_1(unsigned int a){ // hash function on CPU, also need to have a on_device function
+        a = (a+0x7ed55d16) + (a<<12);
+        a = (a^0xc761c23c) ^ (a>>19);
+        a = (a+0x165667b1) + (a<<5);
+        a = (a+0xd3a2646c) ^ (a<<9);
+        a = (a+0xfd7046c5) + (a<<3);
+        a = (a^0xb55a4f09) ^ (a>>16);
+        return a;
+    }
+    
+    unsigned int hash_func_2(unsigned int key){ // hash function on CPU, also need to have a on_device function
+        unsigned int c2=0x27d4eb2d; // a prime or an odd constant
+        key = (key ^ 61) ^ (key >> 16);
+        key = key + (key << 3);
+        key = key ^ (key >> 4);
+        key = key * c2;
+        key = key ^ (key >> 15);
+        return key;
+    }
+    
+    void cuckoo_create_hash(unsigned int keys ){
+    
+    }
+    
+    void set_to_n(unsigned int *data, int size, unsigned int n){
+        for (int i = 0 ; i < size; i ++){
+            data[i] = n;
+        }
+    }
+    
     // cpu version of retrival
     std::vector<std::unordered_map<unsigned int, std::vector<int>>> band_maps;
     
-    LSH_WTA(int K, int units_per_band, int W, int m, int LSTM_size, int vocab_size, dType * d_D, dType * d_b, int debug_code){
+    LSH_WTA(int K, int units_per_band, int W, int m, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
         
         if (debug_code % 2 == 0){
             this->show_debug_info = false;
@@ -76,6 +128,7 @@ public:
         this->d = LSTM_size + 1;
         this->vocab_size = vocab_size;
         this->P = this->units_per_band * this->W;
+        this->batch_size = batch_size;
         
         zero_to_d = boost::uniform_int<>(0,d-1);
         dice = new boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> >(gen, zero_to_d);
@@ -87,11 +140,47 @@ public:
         // d_bands
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands, this->vocab_size * this->W * sizeof(unsigned int)),"d_bands failed\n");
         h_bands = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+
+        // d_bands_index
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands_index, this->vocab_size * this->W * sizeof(unsigned int)),"d_bands_index failed\n");
+        h_bands_index = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        
+        // d_key_1
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_key_1 failed\n");
+        h_key_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+
+        // d_value_1
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_1 failed\n");
+        h_value_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+
+        // d_key_2
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_key_2 failed\n");
+        h_key_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+
+        // d_value_2
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
+        h_value_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+
+        // d_length_1
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
+        h_length_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+ 
+        // d_length_2
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
+        h_length_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        
+        // d_h_t_pad
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad, (LSTM_size+1) * batch_size * sizeof(dType)),"d_h_t_pad failed\n");
+
+        // d_h_t_pad_codes
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad_codes, batch_size * this->W * sizeof(unsigned int)),"d_codes failed\n");
+        
         
         // prepare d_Db
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_Db, this->vocab_size * this->d * sizeof(dType)),"d_Db failed\n");
         cudaMemcpy(d_Db,d_D,LSTM_size*vocab_size*sizeof(dType),cudaMemcpyDeviceToDevice);
         cudaMemcpy(d_Db + LSTM_size * vocab_size, d_b, vocab_size*sizeof(dType),cudaMemcpyDeviceToDevice);
+        
         
         // get permute
         for (int i =0 ; i < this->P; i++){
@@ -126,10 +215,8 @@ public:
     }
     
     
-    void topm(dType *d_outputdist, dType *d_h_t, int batch_size){
+    void topm_cpu(dType *d_outputdist, dType *d_h_t, int batch_size){
         // create a new d_h_t
-        dType * d_h_t_pad;
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad, (LSTM_size+1) * batch_size * sizeof(dType)),"d_h_t_pad failed\n");
         
         pad_h_t<<<batch_size, std::min(256, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
         CUDA_GET_LAST_ERROR("pad_h_t");
@@ -141,15 +228,13 @@ public:
         std::cout << "d_h_t\n";
         print_matrix_gpu(d_h_t, LSTM_size, batch_size);
         }
-        
-
-        
         //create hash_code
         
-        unsigned int *d_codes;
         unsigned int *h_codes;
+        unsigned int *d_codes;
         
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_codes, batch_size * this->W * sizeof(unsigned int)),"d_codes failed\n");
+
         h_codes = (unsigned int * ) malloc(batch_size * this->W * sizeof(unsigned int));
         
         hash_code(d_codes, d_h_t_pad, batch_size);
@@ -235,13 +320,56 @@ public:
         
         free(h_codes);
         cudaFree(d_codes);
-        cudaFree(d_h_t_pad);
         
         
         
     }
     
-    void get_top_m(unsigned int *h_codes, int * h_top_ids, int m, int batch_index, int batch_size){
+    void topm(dType *d_outputdist, dType *d_h_t, int batch_size){
+        
+        
+        
+        // prepare d_h_t_pad
+        pad_h_t<<<batch_size, std::min(256, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
+        CUDA_GET_LAST_ERROR("pad_h_t");
+
+        
+        
+        //create hash_code for d_h_t_pad
+        hash_code(d_h_t_pad_codes, d_h_t_pad, batch_size);
+        CUDA_GET_LAST_ERROR("hash_code in topm");
+        
+        
+        
+        //fill d_outputdist
+        thrust::device_ptr<dType> thrust_d_outputdist = thrust::device_pointer_cast(d_outputdist);
+        thrust::fill(thrust_d_outputdist, thrust_d_outputdist + vocab_size * batch_size , NEG_FILL);
+        CUDA_GET_LAST_ERROR("thrust::fill");
+
+        
+        //search for the top ids: d_outputdist[top_id] = 1;
+        cuckoo_lookup<<<batch_size, std::min(256,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
+        CUDA_GET_LAST_ERROR("cuckoo_lookup");
+
+        
+
+        // do sparse matrix multiplication
+        sparse_dot_product_2<<<dim3(vocab_size, batch_size),256>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
+        
+        CUDA_GET_LAST_ERROR("sparse_dot_product_2");
+        
+        
+        if (show_debug_info_2){
+            std::cout<<"d_h_t_pad_codes\n";
+            print_matrix_gpu(d_h_t_pad_codes, batch_size, this->W);
+            std::cout<<"d_outputdist\n";
+            print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
+        }
+        
+    }
+    
+    
+    void get_top_m_cpu(unsigned int *h_codes, int * h_top_ids, int m, int batch_index, int batch_size){
         std::unordered_map<int, int> counts;
         for (int i = 0; i < this->W; i ++ ){
             unsigned int code = h_codes[i * batch_size + batch_index];
@@ -281,7 +409,7 @@ public:
     }
     
     
-    void create_hash(){
+    void create_hash_cpu(){
 
         this->hash_code(d_bands, d_Db, vocab_size);
         
@@ -307,10 +435,136 @@ public:
         }
     }
     
+    void create_hash(){
+        // create the hash on cpu
+        this->create_hash_cpu();
+        
+        // create the cuckoo hash
+        set_to_n(this->h_key_1, this->vocab_size * this->W, -1);
+        set_to_n(this->h_key_2, this->vocab_size * this->W, -1);
+        set_to_n(this->h_value_1, this->vocab_size * this->W, -1);
+        set_to_n(this->h_value_2, this->vocab_size * this->W, -1);
+        set_to_n(this->h_length_1, this->vocab_size * this->W, -1);
+        set_to_n(this->h_length_2, this->vocab_size * this->W, -1);
+
+        if (show_debug_info_2){
+            std::cout<< "h_bands before \n";
+            print_matrix(this->h_bands, this->vocab_size, this->W);
+        }
+
+        
+        
+        for (int i =0 ; i < this->W; i ++){
+            int start = 0;
+            for (auto &item : band_maps[i] ){
+                unsigned int code = item.first;
+                std::vector<int> &word_indexes = item.second;
+                unsigned int value = start;
+                unsigned int length = word_indexes.size();
+                
+                // add the bands and bands_index
+                for (int j = 0; j < word_indexes.size(); j++){
+                    h_bands[i*this->vocab_size + start] = code;
+                    h_bands_index[i*this->vocab_size + start] = word_indexes[j];
+                    start += 1;
+                }
+                
+                // hash (code,value) into cuckoo
+                int side = 0;
+                while (true){
+                    if (side == 0){
+                        unsigned int key = this->hash_func_1(code) % this->vocab_size + i * this->vocab_size;
+                        
+                        if (this->h_key_1[key] == -1){
+                            this->h_key_1[key] = code;
+                            this->h_value_1[key] = value;
+                            this->h_length_1[key] = length;
+                            break;
+                        } else {
+                            unsigned int temp_code = this->h_key_1[key];
+                            unsigned int temp_value = this->h_value_1[key];
+                            unsigned int temp_length = this->h_length_1[key];
+                            this->h_key_1[key] = code;
+                            this->h_value_1[key] = value;
+                            this->h_length_1[key] = length;
+                            code = temp_code;
+                            value = temp_value;
+                            length = temp_length;
+                            side = 1;
+                        }
+                    } else {
+                        unsigned int key = this->hash_func_2(code) % this->vocab_size + i * this->vocab_size;
+                        if (this->h_key_2[key] == -1){
+                            this->h_key_2[key] = code;
+                            this->h_value_2[key] = value;
+                            this->h_length_2[key] = length;
+                            break;
+                        } else {
+                            unsigned int temp_code = this->h_key_2[key];
+                            unsigned int temp_value = this->h_value_2[key];
+                            unsigned int temp_length = this->h_length_2[key];
+                            this->h_key_2[key] = code;
+                            this->h_value_2[key] = value;
+                            this->h_length_2[key] = length;
+                            code = temp_code;
+                            value = temp_value;
+                            length = temp_length;
+                            side = 0;
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (show_debug_info_2){
+            std::cout<< "h_bands after \n";
+            print_matrix(this->h_bands, this->vocab_size, this->W);
+            std::cout<< "h_bands_index after \n";
+            print_matrix(this->h_bands_index, this->vocab_size, this->W);
+            std::cout<< "h_key_1 after \n";
+            print_matrix(this->h_key_1, this->vocab_size, this->W);
+            std::cout<< "h_value_1 after \n";
+            print_matrix(this->h_value_1, this->vocab_size, this->W);
+            std::cout<< "h_key_2 after \n";
+            print_matrix(this->h_key_2, this->vocab_size, this->W);
+            std::cout<< "h_value_2 after \n";
+            print_matrix(this->h_value_2, this->vocab_size, this->W);
+            std::cout<< "band after hash_code 1 \n";
+            for (int j =0 ; j< this->vocab_size; j ++ ){
+                for (int i =0 ; i< this->W; i ++ ){
+                    unsigned int code = this->h_bands[i*this->vocab_size + j];
+                    unsigned int key = this->hash_func_1(code) % this->vocab_size;
+                    std::cout<< key << " ";
+                }
+                std::cout<< "\n";
+            }
+            std::cout<< "band after hash_code 2 \n";
+            for (int j =0 ; j< this->vocab_size; j ++ ){
+                for (int i =0 ; i< this->W; i ++ ){
+                    unsigned int code = this->h_bands[i*this->vocab_size + j];
+                    unsigned int key = this->hash_func_2(code) % this->vocab_size;
+                    std::cout<< key << " ";
+                }
+                std::cout<< "\n";
+            }
+        }
+
+        // copy to GPU
+        cudaMemcpy(d_bands, h_bands, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_bands_index, h_bands_index, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_1, h_key_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_2, h_key_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_1, h_value_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_2, h_value_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_1, h_length_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_2, h_length_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+
+    }
+    
     
     void hash_code(unsigned int *d_codes, dType *d_vectors, int n_vectors){
-        // d_vectors : [LSTM_size, beam_size]
-        // d_code: [W, beam_size]
+        // d_vectors : [beam_size, LSTM_size]
+        // d_code: [beam_size, W]
         hash_code_kernel<<<this->W, std::min(n_vectors, 256)>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors);
     }
     
