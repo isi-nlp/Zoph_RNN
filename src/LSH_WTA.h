@@ -65,7 +65,7 @@ public:
     Timer timer;
     bool show_debug_info = false;
     bool show_debug_info_2 = false;
-    
+    bool dump_file = false;
     int calltime = 0;
     
     
@@ -108,17 +108,25 @@ public:
     
     LSH_WTA(int K, int units_per_band, int W, int m, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
         
-        if (debug_code % 2 == 0){
-            this->show_debug_info = false;
-        } else {
+        
+        if (debug_code % 2 == 1){
             this->show_debug_info = true;
+        } else {
+            this->show_debug_info = false;
         }
         
-        if ((debug_code / 2) % 2 == 0){
+        if ((debug_code >> 1) % 2 == 0){
             show_debug_info_2 = false;
         } else {
             show_debug_info_2 = true;
         }
+
+        if ((debug_code >> 2) % 2 == 0){
+            dump_file = false;
+        } else {
+            dump_file = true;
+        }
+
         
         this->m = m;
         this->K = K;
@@ -331,30 +339,29 @@ public:
         
         
         
-        // prepare d_h_t_pad
+        // prepare d_h_t_pad 0.0004s
         pad_h_t<<<batch_size, std::min(256, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
         CUDA_GET_LAST_ERROR("pad_h_t");
         
-        
-        
-        //create hash_code for d_h_t_pad
+        //create hash_code for d_h_t_pad 0.013s
         hash_code(d_h_t_pad_codes, d_h_t_pad, batch_size);
         CUDA_GET_LAST_ERROR("hash_code in topm");
         
-        
-        
-        //fill d_outputdist
-        thrust::device_ptr<dType> thrust_d_outputdist = thrust::device_pointer_cast(d_outputdist);
-        thrust::fill(thrust_d_outputdist, thrust_d_outputdist + vocab_size * batch_size , NEG_FILL);
-        CUDA_GET_LAST_ERROR("thrust::fill");
+        //fill d_outputdist 0.06s
+        //thrust::device_ptr<dType> thrust_d_outputdist = thrust::device_pointer_cast(d_outputdist);
+        //thrust::fill(thrust::cuda::par, thrust_d_outputdist, thrust_d_outputdist + vocab_size * batch_size , NEG_FILL);
+        //CUDA_GET_LAST_ERROR("thrust::fill");
+
+        // 0.001s
+        cudaMemset(d_outputdist, 0, vocab_size * batch_size* sizeof(dType));
 
         
-        //search for the top ids: d_outputdist[top_id] = 1;
-        cuckoo_lookup<<<batch_size, std::min(256,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
+        //search for the top ids: d_outputdist[top_id] = 1; //0.12s
+        cuckoo_lookup<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
         CUDA_GET_LAST_ERROR("cuckoo_lookup");
 
         calltime += 1;
-        if (calltime == -1){
+        if (calltime == 2 && dump_file){
             std::ofstream o_outputdist("d_outputdist_input.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
             o_outputdist.close();
@@ -369,11 +376,11 @@ public:
         }
 
         // do sparse matrix multiplication
-        sparse_dot_product_2<<<dim3(vocab_size, batch_size),256>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
+        //sparse_dot_product_2<<<dim3(vocab_size, batch_size),256>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
         
         CUDA_GET_LAST_ERROR("sparse_dot_product_2");
         
-        if (calltime == -1) {
+        if (calltime == 2 && dump_file) {
             std::ofstream o_outputdist("d_outputdist_output.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
             o_outputdist.close();

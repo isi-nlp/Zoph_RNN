@@ -2928,7 +2928,7 @@ void sparse_dot_product_2(dType *d_outputdist, dType *d_Db, dType *d_h_t_pad, in
     
     __syncthreads();
     
-    if (flag > 0){
+    if (flag > -1000.0){
 
         buffer[threadIdx.x] = 0.0;
         for (int i = threadIdx.x ; i < LSTM_size + 1; i += blockDim.x){
@@ -3027,11 +3027,43 @@ void cuckoo_lookup(unsigned int *d_codes, dType *d_outputdist,int batch_size, in
         }
         for (int i = 0 ; i< length; i ++ ){
             unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
-            d_outputdist[IDX2C(word_index, batch_index, vocab_size)] = 1.0;
+            atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
         }
     }
 }
 
+// d_codes: [batch_size, W]
+// d_outputdist: [vocab_size, batch_size]
+// <<<batch_size, 256>>> : each block is responsible for each batch
+template<typename dType>
+__global__
+void cuckoo_lookup_2(unsigned int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
+                   unsigned int *d_key_1, unsigned int *d_value_1, unsigned int * d_length_1,
+                   unsigned int *d_key_2, unsigned int *d_value_2, unsigned int * d_length_2,
+                   unsigned int *d_bands_index){
+    int batch_index = blockIdx.x;
+    for (int w_index = threadIdx.x; w_index < W; w_index += blockDim.x){
+        unsigned int code = d_codes[w_index * batch_size + batch_index];
+        //cuckoo lookup;
+        unsigned int key1 = hash_func_1_gpu(code) % vocab_size + w_index * vocab_size;
+        int start = -1;
+        int length = 0;
+        if (d_key_1[key1] == code){
+            start = d_value_1[key1];
+            length = d_length_1[key1];
+        } else {
+            unsigned int key2 = hash_func_2_gpu(code) % vocab_size + w_index * vocab_size;
+            if (d_key_2[key2] == code){
+                start = d_value_2[key2];
+                length = d_length_2[key2];
+            }
+        }
+        for (int i = 0 ; i< length; i ++ ){
+            unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+            atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+        }
+    }
+}
 
 
 // for shrink the target vocab set;
