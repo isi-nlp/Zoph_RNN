@@ -191,6 +191,15 @@ public:
         prepare_Db<<<this->vocab_size, 512>>>(d_Db, d_D, d_b, this->vocab_size, this->LSTM_size);
         CUDA_GET_LAST_ERROR("prepare_Db");
 
+        if (show_debug_info){
+            std::cout<<"d_D\n";
+            print_matrix_gpu(d_D, vocab_size, LSTM_size );
+            std::cout<<"d_b\n";
+            print_matrix_gpu(d_b, vocab_size,1);
+            std::cout<<"d_Db\n";
+            print_matrix_gpu(d_Db, LSTM_size + 1, vocab_size);
+        }
+        
         
         
         // get permute
@@ -351,13 +360,53 @@ public:
 
         // 0.001s
         cudaMemset(d_outputdist, 0, vocab_size * batch_size* sizeof(dType));
+        calltime += 1;
         
+        if (calltime == 2 && dump_file){
+            std::ofstream output("d_ht_pad_codes_input.txt");
+            write_matrix_GPU(d_h_t_pad_codes,this->W,batch_size,output);
+            output.close();
+
+            std::ofstream output("d_outputdist_lookup_input.txt");
+            write_matrix_GPU(d_outputdist,vocab_size,batch_size,output);
+            output.close();
+            
+            std::ofstream output("d_key1_input.txt");
+            write_matrix_GPU(this->d_key_1,vocab_size,this->W,output);
+            output.close();
+
+            std::ofstream output("d_value1_input.txt");
+            write_matrix_GPU(this->d_value_1,vocab_size,this->W,output);
+            output.close();
+            
+            std::ofstream output("d_length1_input.txt");
+            write_matrix_GPU(this->d_length_1,vocab_size,this->W,output);
+            output.close();
+            
+            std::ofstream output("d_key2_input.txt");
+            write_matrix_GPU(this->d_key_2,vocab_size,this->W,output);
+            output.close();
+            
+            std::ofstream output("d_value2_input.txt");
+            write_matrix_GPU(this->d_value_2,vocab_size,this->W,output);
+            output.close();
+
+            std::ofstream output("d_length2_input.txt");
+            write_matrix_GPU(this->d_length_2,vocab_size,this->W,output);
+            output.close();
+
+            std::ofstream output("d_bands_index_input.txt");
+            write_matrix_GPU(d_bands_index,vocab_size,this->W,output);
+            output.close();
+
+            
+        }
         
         //search for the top ids: d_outputdist[top_id] = 1; //0.12s
         cuckoo_lookup_T<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
         CUDA_GET_LAST_ERROR("cuckoo_lookup");
 
-        calltime += 1;
+
         if (calltime == 2 && dump_file){
             std::ofstream o_outputdist("d_outputdist_input.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
@@ -374,7 +423,6 @@ public:
 
         // do sparse matrix multiplication
         sparse_dot_product_2<<<dim3(vocab_size, batch_size),1024>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
-        
         CUDA_GET_LAST_ERROR("sparse_dot_product_2");
         
         if (calltime == 2 && dump_file) {
@@ -442,17 +490,18 @@ public:
         /*
         if (show_debug_info){
             std::cout<<"d_Db\n";
-            print_matrix_gpu(d_Db, vocab_size, LSTM_size + 1);
+            print_matrix_gpu(d_Db, LSTM_size + 1, vocab_size);
             std::cout<<"d_bands\n";
             print_matrix_gpu(d_bands, vocab_size, W);
         }
         */
         
         
+        
         cudaMemcpy(h_bands, d_bands, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyDeviceToHost);
         for (int i = 0 ; i < this->W; i ++){
             for (int j= 0 ; j < vocab_size ; j ++ ){
-                unsigned int code = h_bands[j + i * vocab_size];
+                unsigned int code = h_bands[i + j * this->W];
                 if (band_maps[i].count(code) == 0){
                     band_maps[i][code] = std::vector<int>();
                 }
@@ -546,7 +595,7 @@ public:
             std::cout<< "h_bands after \n";
             print_matrix(this->h_bands, this->W, this->vocab_size);
             std::cout<< "h_bands_index after \n";
-            print_matrix(this->h_bands_index, this->W, this->vocab_size);
+            print_matrix(this->h_bands_index,  this->vocab_size,this->W);
             std::cout<< "h_key_1 after \n";
             print_matrix(this->h_key_1, this->vocab_size, this->W);
             std::cout<< "h_value_1 after \n";
@@ -593,8 +642,11 @@ public:
         // d_vectors : [LSTM_size, beam_size]
         // d_code: [W,beam_size]
         //hash_code_kernel<<<this->W, std::min(n_vectors, 256)>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors);
+        
         int n_block = this->W;
         dim3 block_dim = dim3(256,1);
+        
+        
         int div = 50;
         if (n_vectors < 256) {
             if (this->W < div){
@@ -605,6 +657,8 @@ public:
                 block_dim = dim3(n_vectors, div);
             }
         }
+        
+        
         
         hash_code_kernel_T<<<n_block, block_dim>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors, LSTM_size);
 

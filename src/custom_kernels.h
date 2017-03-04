@@ -2859,6 +2859,7 @@ __global__
 void hash_code_kernel_T(unsigned int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector, int LSTM_size) {
     // bits_per_band = log2(K) * units_per_band;
     int band_index = blockIdx.x * blockDim.y + threadIdx.y;
+    //int band_index = blockIdx.x;
     for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
         unsigned int code = 0;
         for (int u = 0 ; u < units_per_band; u ++ ){
@@ -3051,10 +3052,10 @@ __global__
 void prepare_Db(dType * d_Db, dType * d_D, dType * d_b, int vocab_size, int LSTM_size){
     int vocab_index = blockIdx.x;
     if (threadIdx.x == 0){
-        d_Db[IDX2C(LSTM_size, vocab_index, LSTM_size + 1)] = d_b[vocab_size];
+        d_Db[IDX2C(LSTM_size, vocab_index, LSTM_size + 1)] = d_b[vocab_index];
     }
-    for (int i = threadIdx.x ; i < LSTM_size; i ++){
-        d_Db[IDX2C(i, vocab_size, LSTM_size + 1)] = d_D[IDX2C(vocab_index, i, vocab_size)];
+    for (int i = threadIdx.x ; i < LSTM_size; i += blockDim.x){
+        d_Db[IDX2C(i, vocab_index, LSTM_size + 1)] = d_D[IDX2C(vocab_index, i, vocab_size)];
     }
 }
 
