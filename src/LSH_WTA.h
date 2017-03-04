@@ -37,11 +37,11 @@ public:
     // all matrix is column major
     int *d_permutes; // [K, P]
     int *h_permutes;
-    unsigned int *d_bands; // [vocab_size, W]
+    unsigned int *d_bands; // [W，vocab_size]
     unsigned int *h_bands;
-    dType *d_Db; // [vocab_size, LSTM_size + 1]
-    dType *d_h_t_pad; // [batch_size, LSTM_size + 1]
-    unsigned int *d_h_t_pad_codes; // [beam_size, W]
+    dType *d_Db; // [LSTM_size + 1，vocab_size]
+    dType *d_h_t_pad; // [LSTM_size + 1, batch_size]
+    unsigned int *d_h_t_pad_codes; // [W, beam_size]
 
     unsigned int *h_bands_index; // [vocab_size, W]
     unsigned int *d_bands_index; // [vocab_size, W]
@@ -188,8 +188,9 @@ public:
         
         // prepare d_Db
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_Db, this->vocab_size * this->d * sizeof(dType)),"d_Db failed\n");
-        cudaMemcpy(d_Db,d_D,LSTM_size*vocab_size*sizeof(dType),cudaMemcpyDeviceToDevice);
-        cudaMemcpy(d_Db + LSTM_size * vocab_size, d_b, vocab_size*sizeof(dType),cudaMemcpyDeviceToDevice);
+        prepare_Db<<<this->vocab_size, 512>>>(d_Db, d_D, d_b, this->vocab_size, this->LSTM_size);
+        CUDA_GET_LAST_ERROR("prepare_Db");
+
         
         
         // get permute
@@ -331,16 +332,12 @@ public:
         free(h_codes);
         cudaFree(d_codes);
         
-        
-        
     }
     
     void topm(dType *d_outputdist, dType *d_h_t, int batch_size){
-        
-        
-        
+        //outside base = 0.0466403 sec
         // prepare d_h_t_pad 0.0004s
-        pad_h_t<<<batch_size, std::min(256, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
+        pad_h_t<<<batch_size, std::min(1024, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
         CUDA_GET_LAST_ERROR("pad_h_t");
         
         //create hash_code for d_h_t_pad 0.013s
@@ -354,10 +351,10 @@ public:
 
         // 0.001s
         cudaMemset(d_outputdist, 0, vocab_size * batch_size* sizeof(dType));
-
+        
         
         //search for the top ids: d_outputdist[top_id] = 1; //0.12s
-        cuckoo_lookup<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
+        cuckoo_lookup_T<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
         CUDA_GET_LAST_ERROR("cuckoo_lookup");
 
         calltime += 1;
@@ -367,16 +364,16 @@ public:
             o_outputdist.close();
             
             std::ofstream o_db("d_Db_input.txt");
-            write_matrix_GPU(d_Db,vocab_size,LSTM_size+1,o_db);
+            write_matrix_GPU(d_Db,LSTM_size+1,vocab_size,o_db);
             o_db.close();
             
             std::ofstream o_ht_pad("d_ht_pad_input.txt");
-            write_matrix_GPU(d_Db,batch_size,LSTM_size+1,o_ht_pad);
+            write_matrix_GPU(d_Db,LSTM_size+1,batch_size,o_ht_pad);
             o_ht_pad.close();
         }
 
         // do sparse matrix multiplication
-        //sparse_dot_product_2<<<dim3(vocab_size, batch_size),256>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
+        sparse_dot_product_2<<<dim3(vocab_size, batch_size),1024>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
         
         CUDA_GET_LAST_ERROR("sparse_dot_product_2");
         
@@ -389,7 +386,7 @@ public:
         
         if (show_debug_info_2){
             std::cout<<"d_h_t_pad_codes\n";
-            print_matrix_gpu(d_h_t_pad_codes, batch_size, this->W);
+            print_matrix_gpu(d_h_t_pad_codes, this->W, batch_size);
             std::cout<<"d_outputdist\n";
             print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
             
@@ -478,7 +475,7 @@ public:
 
         if (show_debug_info_2){
             std::cout<< "h_bands before \n";
-            print_matrix(this->h_bands, this->vocab_size, this->W);
+            print_matrix(this->h_bands,  this->W, this->vocab_size);
         }
 
         
@@ -493,8 +490,8 @@ public:
                 
                 // add the bands and bands_index
                 for (int j = 0; j < word_indexes.size(); j++){
-                    h_bands[i*this->vocab_size + start] = code;
-                    h_bands_index[i*this->vocab_size + start] = word_indexes[j];
+                    h_bands[i + this->W*start] = code;
+                    h_bands_index[i * this->vocab_size + start] = word_indexes[j];
                     start += 1;
                 }
                 
@@ -547,9 +544,9 @@ public:
         
         if (show_debug_info_2){
             std::cout<< "h_bands after \n";
-            print_matrix(this->h_bands, this->vocab_size, this->W);
+            print_matrix(this->h_bands, this->W, this->vocab_size);
             std::cout<< "h_bands_index after \n";
-            print_matrix(this->h_bands_index, this->vocab_size, this->W);
+            print_matrix(this->h_bands_index, this->W, this->vocab_size);
             std::cout<< "h_key_1 after \n";
             print_matrix(this->h_key_1, this->vocab_size, this->W);
             std::cout<< "h_value_1 after \n";
@@ -559,8 +556,9 @@ public:
             std::cout<< "h_value_2 after \n";
             print_matrix(this->h_value_2, this->vocab_size, this->W);
             std::cout<< "band after hash_code 1 \n";
+            for (int i =0 ; i< this->W; i ++ ){
             for (int j =0 ; j< this->vocab_size; j ++ ){
-                for (int i =0 ; i< this->W; i ++ ){
+
                     unsigned int code = this->h_bands[i*this->vocab_size + j];
                     unsigned int key = this->hash_func_1(code) % this->vocab_size;
                     std::cout<< key << " ";
@@ -568,9 +566,9 @@ public:
                 std::cout<< "\n";
             }
             std::cout<< "band after hash_code 2 \n";
-            for (int j =0 ; j< this->vocab_size; j ++ ){
-                for (int i =0 ; i< this->W; i ++ ){
-                    unsigned int code = this->h_bands[i*this->vocab_size + j];
+            for (int i =0 ; i< this->W; i ++ ){
+                for (int j =0 ; j< this->vocab_size; j ++ ){
+                    unsigned int code = this->h_bands[j*this->W + i];
                     unsigned int key = this->hash_func_2(code) % this->vocab_size;
                     std::cout<< key << " ";
                 }
@@ -592,9 +590,24 @@ public:
     
     
     void hash_code(unsigned int *d_codes, dType *d_vectors, int n_vectors){
-        // d_vectors : [beam_size, LSTM_size]
-        // d_code: [beam_size, W]
-        hash_code_kernel<<<this->W, std::min(n_vectors, 256)>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors);
+        // d_vectors : [LSTM_size, beam_size]
+        // d_code: [W,beam_size]
+        //hash_code_kernel<<<this->W, std::min(n_vectors, 256)>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors);
+        int n_block = this->W;
+        dim3 block_dim = dim3(256,1);
+        int div = 50;
+        if (n_vectors < 256) {
+            if (this->W < div){
+                block_dim = dim3(n_vectors,1);
+            } else {
+                // assume W is the multiples of 50
+                n_block = this->W / div;
+                block_dim = dim3(n_vectors, div);
+            }
+        }
+        
+        hash_code_kernel_T<<<n_block, block_dim>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors, LSTM_size);
+
     }
     
     
