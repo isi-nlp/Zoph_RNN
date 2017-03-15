@@ -279,7 +279,9 @@ struct global_params {
     int WTA_W = 100; // number of bands;
     int show_debug_info = 0;
     int WTA_m = 10;
-    
+    int WTA_threshold = 1;
+    int WTA_topn = 0;
+
     // for target vocab set shrink
     // 0 full softmax
     // 1 top 10k

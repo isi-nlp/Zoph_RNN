@@ -328,7 +328,7 @@ void softmax_layer<dType>::load_weights(std::ifstream &input) {
 	load_weights_GPU(input);
     
     if (this->LSH_type == 1){
-        lsh_wta = new LSH_WTA<dType>(p_params->WTA_K, p_params->WTA_units_per_band, p_params->WTA_W, p_params->WTA_m, LSTM_size, output_vocab_size, minibatch_size, d_D, d_b_d,p_params->show_debug_info);
+        lsh_wta = new LSH_WTA<dType>(p_params->WTA_K, p_params->WTA_units_per_band, p_params->WTA_W, p_params->WTA_m, p_params->WTA_threshold, p_params->WTA_topn, LSTM_size, output_vocab_size, minibatch_size, d_D, d_b_d,p_params->show_debug_info);
     }
 
 }

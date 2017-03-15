@@ -773,6 +773,7 @@ __device__ double atomicAddDouble(double* address, double val)
 }
 
 //atomic add for doubles,since undefined in cuda
+/*
 __device__ double atomicAdd(double* address, double val)
 {
     unsigned long long int* address_as_ull =
@@ -786,6 +787,7 @@ __device__ double atomicAdd(double* address, double val)
     } while (assumed != old);
     return __longlong_as_double(old);
 }
+*/
 
 
 void curandGenerateUniform_wrapper(float *d_mask,int size,curandGenerator_t &generator) {

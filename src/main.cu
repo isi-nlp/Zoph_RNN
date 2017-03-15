@@ -243,6 +243,8 @@ void command_line_parse(global_params &params,int argc, char **argv) {
     ("WTA-units-per-band",po::value<int>(&params.WTA_units_per_band),"units per band; DEFAULT: 2")
     ("WTA-W",po::value<int>(&params.WTA_W),"number of bands; DEFAULT: 100")
     ("WTA-m",po::value<int>(&params.WTA_m),"number of internal top m, not the same with beam_size; DEFAULT: 10")
+    ("WTA-threshold",po::value<int>(&params.WTA_threshold),"threshold DEFAULT: 1")
+    ("WTA-topn",po::value<int>(&params.WTA_topn),"topn DEFAULT: 0")
     ("show-debug-info",po::value<int>(&params.show_debug_info),"whether show LSH debug info; DEFAULT: 0")
     // for target vocab shrink
     ("target-vocab-shrink",po::value<int>(&params.target_vocab_policy),"0: full softmax, 1 top k vocab only, 2: using alignment; DEFAULT: 10")

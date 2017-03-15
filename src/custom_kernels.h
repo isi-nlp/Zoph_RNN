@@ -2962,7 +2962,6 @@ void sparse_dot_product(dType *d_outputdist, dType *d_results, dType *d_Db, dTyp
 template<typename dType>
 __global__
 void sparse_dot_product_2(dType *d_outputdist, dType *d_Db, dType *d_h_t_pad, int LSTM_size, int batch_size, int vocab_size){
-
     const int nthreads = 1024;
     __shared__ dType buffer[nthreads];
     
@@ -3093,6 +3092,14 @@ void cuckoo_lookup(unsigned int *d_codes, dType *d_outputdist,int batch_size, in
     }
 }
 
+// <<<1,256>>>
+__global__ void inc_range(float *d_outputdist, unsigned int * d_bands_index, int start, int length, int w_index, int batch_index, int vocab_size){
+    for (int i = threadIdx.x; i < length; i += blockDim.x){
+        unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+        atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+    }
+}
+
 // d_codes: [W, batch_size]
 // d_bands_index: [vocab_size，W]
 // d_outputdist: [vocab_size, batch_size]
@@ -3120,11 +3127,18 @@ void cuckoo_lookup_T(unsigned int *d_codes, dType *d_outputdist,int batch_size, 
                 length = d_length_2[key2];
             }
         }
-        for (int i = 0 ; i< length; i ++ ){
-            unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
-            atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+        if (length >= 256){
+            cudaStream_t s;
+            cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
+            inc_range<<<1,256,0,s>>>(d_outputdist,d_bands_index,start,length,w_index,batch_index,vocab_size);
+        } else {
+            for (int i = 0 ; i< length; i ++ ){
+                unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+                atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+            }
         }
     }
+   
 }
 
 
@@ -3142,9 +3156,92 @@ void shrink_vocab(dType *d_D_shrink, dType *d_D, dType *d_b_shrink, dType * d_b,
     }
 }
 
+__global__
+void dense2array(float *matrix, int vocab_size, int batch_size, float *array, int* index_array, int topn, int threshold){
+    int vocab_index = threadIdx.x + blockIdx.x * blockDim.x;
+    if (vocab_index < vocab_size){
+        if (vocab_index < topn){
+            array[vocab_index] = 1.f;
+            index_array[vocab_index] = vocab_index;
+        } else {
+            float dest_val = 0;
+            for (int batch_index = 0 ; batch_index < batch_size; batch_index ++){
+                float val = matrix[batch_index * vocab_size + vocab_index];
+                if (val >= threshold){
+                    dest_val = 1;
+                    break;
+                }
+            }
+            array[vocab_index] = dest_val;
+            if (dest_val == 0){
+                index_array[vocab_index] = -1;
+            } else {
+                index_array[vocab_index] = vocab_index;
+            }
+            
+        }
+    }
+}
+
+// rowIdx: [nnz]
+// <<<(nnz+2-1)/2, (512,2)>>>
+__global__
+void fill_new_db(float *d_new_db, float* d_db, int *rowIdx, int embed, int nnz){
+    int row_index = threadIdx.y + blockIdx.x * blockDim.y;
+    if (row_index < nnz){
+        int vocab_index = rowIdx[row_index];
+        //float s = 0;
+        for (int i = threadIdx.x ; i < embed ; i+=blockDim.x){
+            d_new_db[row_index*embed + i] = d_db[vocab_index*embed + i];
+            
+            //s += d_db[vocab_index*embed + i];
+        }
+    }
+}
+
+struct non_negative
+{
+    __host__ __device__
+    bool operator()(const int x)
+    {
+        return x >= 0;
+    }
+};
+
+// <<<(n,batch_size), 1024 >>>
+template<typename dType>
+__global__
+void fill_number(dType *d_dist, int vocab_size, int batch_size, dType val){
+    int batch_index = blockIdx.y;
+    for (int vocab_index = threadIdx.x + blockIdx.x * blockDim.x; vocab_index < vocab_size; vocab_index += gridDim.x * blockDim.x){
+        d_dist[IDX2C(vocab_index, batch_index, vocab_size)] = val;
+    }
+}
 
 
+// d_dist_buf : [vocab, batch_size]
+// d_dist_shrink : [nnz, batch_size]
+// <<<((nnz+1024-1)/1024,batch_size), 1024 >>>
+__global__
+void array2dense(float *d_dist, float* d_dist_shrink, int* d_rowIdx, int vocab_size, int nnz){
+    int batch_index = blockIdx.y;
+    for (int row_index = threadIdx.x + blockIdx.x * blockDim.x; row_index < nnz; row_index += gridDim.x * blockDim.x){
+        int vocab_index = d_rowIdx[row_index];
+        d_dist[IDX2C(vocab_index, batch_index, vocab_size)] = d_dist_shrink[IDX2C(row_index,batch_index, nnz)];
+    }
+}
 
+void compact(int* h_input, int* h_output, int *d_input, int *d_output, int size){
+    cudaMemcpy(h_input, d_input, size*sizeof(int), cudaMemcpyDeviceToHost);
+    int k = 0;
+    for (int i =0 ; i<size; i++){
+        if (h_input[i] >= 0) {
+            h_output[k] = h_input[i];
+            k+=1;
+        }
+    }
+    cudaMemcpy(d_output, h_output, k*sizeof(int), cudaMemcpyHostToDevice);
+}
 
 
 

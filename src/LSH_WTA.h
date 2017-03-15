@@ -19,6 +19,11 @@
 #include "boost/range/algorithm_ext/push_back.hpp"
 #include "boost/range/adaptor/map.hpp"
 #include "thrust/fill.h"
+#include <thrust/copy.h>
+#include <thrust/execution_policy.h>
+#include <thrust/system/cuda/execution_policy.h>
+#include <thrust/system/cuda/memory.h>
+
 
 template<typename dType>
 class LSH_WTA {
@@ -40,6 +45,8 @@ public:
     unsigned int *d_bands; // [W，vocab_size]
     unsigned int *h_bands;
     dType *d_Db; // [LSTM_size + 1，vocab_size]
+    dType *d_Db_shrink; // [LSTM_size + 1, nnz]
+    
     dType *d_h_t_pad; // [LSTM_size + 1, batch_size]
     unsigned int *d_h_t_pad_codes; // [W, beam_size]
 
@@ -62,12 +69,31 @@ public:
     unsigned int *d_value_2; // [vocab_size, W]  record the starts
     unsigned int *d_length_2; // [vocab_size, W]  record the starts
     
+    dType *d_array; //[vocab_size]
+    int *d_index; //[vocab_size]
+    int *d_rowIdx; //[vocab_size];
+    int *h_index;
+    int *h_rowIdx;
+    
+    thrust::device_ptr<int> thrust_index;
+    thrust::device_ptr<int> thrust_rowIdx;
+
+    
+    dType* d_outputdist_shrink; //[vocab_size, batch_size];
+    
     Timer timer;
     bool show_debug_info = false;
     bool show_debug_info_2 = false;
     bool dump_file = false;
     int calltime = 0;
+    int topn = 0;
+    int threshold = 1;
+    float fnnz;
+    int nnz;
     
+    int debug_code;
+    
+    cublasHandle_t cublasHandle;
     
     boost::random::mt19937 gen;
     boost::uniform_int<> zero_to_d;
@@ -106,7 +132,7 @@ public:
     // cpu version of retrival
     std::vector<std::unordered_map<unsigned int, std::vector<int>>> band_maps;
     
-    LSH_WTA(int K, int units_per_band, int W, int m, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
+    LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
         
         
         if (debug_code % 2 == 1){
@@ -127,6 +153,7 @@ public:
             dump_file = true;
         }
 
+        this->debug_code = debug_code;
         
         this->m = m;
         this->K = K;
@@ -139,6 +166,8 @@ public:
         this->vocab_size = vocab_size;
         this->P = this->units_per_band * this->W;
         this->batch_size = batch_size;
+        this->threshold = WTA_threshold;
+        this->topn = WTA_topn;
         
         zero_to_d = boost::uniform_int<>(0,d-1);
         dice = new boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> >(gen, zero_to_d);
@@ -185,9 +214,26 @@ public:
         // d_h_t_pad_codes
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad_codes, batch_size * this->W * sizeof(unsigned int)),"d_codes failed\n");
         
+        // d_array
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_array, this->vocab_size * sizeof(dType)),"d_array failed\n");
+        
+        // d_index d_rowIdx
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_index, this->vocab_size * sizeof(int)),"d_index failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_rowIdx, this->vocab_size * sizeof(int)),"d_rowIdx failed\n");
+        
+        h_index = (int * ) malloc (this->vocab_size  * sizeof(int));
+        h_rowIdx = (int * ) malloc (this->vocab_size  * sizeof(int));
+
+
+        
+        
+        // d_outputdist_shrink
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_shrink, this->vocab_size * this->batch_size * sizeof(dType)),"d_outputdist_shrink failed\n");
+
         
         // prepare d_Db
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_Db, this->vocab_size * this->d * sizeof(dType)),"d_Db failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_Db_shrink, this->vocab_size * this->d * sizeof(dType)),"d_Db_shrink failed\n");
         prepare_Db<<<this->vocab_size, 512>>>(d_Db, d_D, d_b, this->vocab_size, this->LSTM_size);
         CUDA_GET_LAST_ERROR("prepare_Db");
 
@@ -218,6 +264,8 @@ public:
             band_maps.push_back(map);
         }
         
+        cublasCreate(&cublasHandle);
+
         create_hash();
     }
     
@@ -363,51 +411,56 @@ public:
         calltime += 1;
         
         if (calltime == 2 && dump_file){
+            cudaDeviceSynchronize();
+
             std::ofstream output("d_ht_pad_codes_input.txt");
             write_matrix_GPU(d_h_t_pad_codes,this->W,batch_size,output);
             output.close();
 
-            std::ofstream output("d_outputdist_lookup_input.txt");
+            output.open("d_outputdist_lookup_input.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,output);
             output.close();
             
-            std::ofstream output("d_key1_input.txt");
+            output.open("d_key1_input.txt");
             write_matrix_GPU(this->d_key_1,vocab_size,this->W,output);
             output.close();
 
-            std::ofstream output("d_value1_input.txt");
+            output.open("d_value1_input.txt");
             write_matrix_GPU(this->d_value_1,vocab_size,this->W,output);
             output.close();
             
-            std::ofstream output("d_length1_input.txt");
+            output.open("d_length1_input.txt");
             write_matrix_GPU(this->d_length_1,vocab_size,this->W,output);
             output.close();
             
-            std::ofstream output("d_key2_input.txt");
+            output.open("d_key2_input.txt");
             write_matrix_GPU(this->d_key_2,vocab_size,this->W,output);
             output.close();
             
-            std::ofstream output("d_value2_input.txt");
+            output.open("d_value2_input.txt");
             write_matrix_GPU(this->d_value_2,vocab_size,this->W,output);
             output.close();
 
-            std::ofstream output("d_length2_input.txt");
+            output.open("d_length2_input.txt");
             write_matrix_GPU(this->d_length_2,vocab_size,this->W,output);
             output.close();
 
-            std::ofstream output("d_bands_index_input.txt");
+            output.open("d_bands_index_input.txt");
             write_matrix_GPU(d_bands_index,vocab_size,this->W,output);
             output.close();
 
             
         }
         
-        //search for the top ids: d_outputdist[top_id] = 1; //0.12s
+        //search for the top ids: d_outputdist[top_id] = 1; //
+        if ((debug_code >> 3) % 2 == 0) {
         cuckoo_lookup_T<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
         CUDA_GET_LAST_ERROR("cuckoo_lookup");
-
+        }
 
         if (calltime == 2 && dump_file){
+            cudaDeviceSynchronize();
+
             std::ofstream o_outputdist("d_outputdist_input.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
             o_outputdist.close();
@@ -422,10 +475,83 @@ public:
         }
 
         // do sparse matrix multiplication
-        sparse_dot_product_2<<<dim3(vocab_size, batch_size),1024>>>(d_outputdist, d_Db, d_h_t_pad, LSTM_size, batch_size, vocab_size);
-        CUDA_GET_LAST_ERROR("sparse_dot_product_2");
         
+        
+        // dense2array
+        if ((debug_code >> 4) % 2 == 0) {
+
+        cudaMemset(d_array, 0, vocab_size * sizeof(dType));
+        cudaMemset(d_index, 0, vocab_size * sizeof(int));
+        cudaMemset(d_rowIdx, 0, vocab_size * sizeof(int));
+            
+        }
+        
+        if ((debug_code >> 5) % 2 == 0) {
+
+        int thread_size = 256;
+        dim3 threads(thread_size);
+        dim3 grid((this->vocab_size+threads.x-1)/threads.x);
+        dense2array<<<grid, threads>>>(d_outputdist, this->vocab_size, this->batch_size, d_array, d_index, this->topn, this->threshold); //0.02ms
+        }
+        
+        if ((debug_code >> 6) % 2 == 0) {
+        // stream compaction
+        cublasSasum(cublasHandle, this->vocab_size, d_array, 1, &fnnz); // 0.01ms
+        }
+        
+        if ((debug_code >> 7) % 2 == 0) {
+            //std::cout<<"d_index b\n";
+            //print_matrix_gpu(d_index, 20, 1);
+            //std::cout<<"d_index b\n";
+            //print_matrix_gpu(d_rowIdx, 20, 1);
+            
+
+            
+            compact(h_index, h_rowIdx, d_index, d_rowIdx, this->vocab_size);
+            //thrust::copy_if(thrust::cuda::par, d_index, d_index + this->vocab_size , d_rowIdx, non_negative()); //0.9ms
+            //CUDA_GET_LAST_ERROR("copy_if");
+            //thrust::copy_if(thrust_index, thrust_index + this->vocab_size , thrust_rowIdx, non_negative()); //0.09ms
+            
+            //std::cout<<"d_index a\n";
+            //print_matrix_gpu(d_index, 20, 1);
+            //std::cout<<"d_index a\n";
+            //print_matrix_gpu(d_rowIdx, 20, 1);
+            
+        }
+        nnz = std::floor(fnnz);
+        
+        std::cout<<"NNZ: "<< nnz << '\n';
+        
+        // fill_new_db
+        if ((debug_code >> 8) % 2 == 0) {
+
+        int thread_x = 256;
+        int thread_y = 256/ thread_x;
+        fill_new_db<<<dim3((nnz+thread_y-1)/thread_y),dim3(thread_x,thread_y)>>>(d_Db_shrink,d_Db,d_rowIdx,this->d, nnz); // 0.47 ms
+        }
+        
+        if ((debug_code >> 9) % 2 == 0) {
+        float alpha = 1.f, beta = 0.f;
+        cublasSgemm(cublasHandle,
+                    CUBLAS_OP_T, CUBLAS_OP_N,
+                    nnz, this->batch_size, this->d, &alpha,
+                    d_Db_shrink, this->d,
+                    d_h_t_pad, this->d,
+                    &beta,
+                    d_outputdist_shrink, nnz); //1.2 ms
+        }
+        
+        if ((debug_code >> 10) % 2 == 0) {
+        fill_number<<<dim3((this->vocab_size+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,this->vocab_size,this->batch_size,(float)-1000.0);
+        }
+        
+        if ((debug_code >> 11) % 2 == 0) {
+        array2dense<<<dim3((nnz+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,d_outputdist_shrink,d_rowIdx,this->vocab_size,nnz);
+        }
+
         if (calltime == 2 && dump_file) {
+            cudaDeviceSynchronize();
+
             std::ofstream o_outputdist("d_outputdist_output.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
             o_outputdist.close();
@@ -433,6 +559,8 @@ public:
         
         
         if (show_debug_info_2){
+            cudaDeviceSynchronize();
+
             std::cout<<"d_h_t_pad_codes\n";
             print_matrix_gpu(d_h_t_pad_codes, this->W, batch_size);
             std::cout<<"d_outputdist\n";
