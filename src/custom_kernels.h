@@ -2826,11 +2826,11 @@ void top_k(dType *probs, dType *results, int* dict, int dict_size) {
 // <<<W, 256>>>
 template<typename dType>
 __global__
-void hash_code_kernel(unsigned int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector) {
+void hash_code_kernel(int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector) {
     // bits_per_band = log2(K) * units_per_band;
     int band_index = blockIdx.x;
     for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
-        unsigned int code = 0;
+        int code = 0;
         for (int u = 0 ; u < units_per_band; u ++ ){
             dType max_val = -1000000000;
             int max_index = -1;
@@ -2856,12 +2856,12 @@ void hash_code_kernel(unsigned int *d_codes, dType *d_vectors, int * d_permutes,
 // d_vectors = [LSTM_size+1, n_vector]
 template<typename dType>
 __global__
-void hash_code_kernel_T(unsigned int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector, int LSTM_size) {
+void hash_code_kernel_T(int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector, int LSTM_size) {
     // bits_per_band = log2(K) * units_per_band;
     int band_index = blockIdx.x * blockDim.y + threadIdx.y;
     //int band_index = blockIdx.x;
     for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
-        unsigned int code = 0;
+        int code = 0;
         for (int u = 0 ; u < units_per_band; u ++ ){
             dType max_val = -1000000000;
             int max_index = -1;
@@ -3021,8 +3021,8 @@ void sparse_dot_product_3(dType *d_outputdist, dType *d_Db, dType *d_h_t_pad, in
 
 
 
-__device__
-unsigned int hash_func_1_gpu(unsigned int a){
+__host__ __device__
+int hash_func_1(int a){
     a = (a+0x7ed55d16) + (a<<12);
     a = (a^0xc761c23c) ^ (a>>19);
     a = (a+0x165667b1) + (a<<5);
@@ -3032,9 +3032,9 @@ unsigned int hash_func_1_gpu(unsigned int a){
     return a;
 }
 
-__device__
-unsigned int hash_func_2_gpu(unsigned int key){
-    unsigned int c2=0x27d4eb2d; // a prime or an odd constant
+__host__ __device__
+int hash_func_2(int key){
+    int c2=0x27d4eb2d; // a prime or an odd constant
     key = (key ^ 61) ^ (key >> 16);
     key = key + (key << 3);
     key = key ^ (key >> 4);
@@ -3064,38 +3064,38 @@ void prepare_Db(dType * d_Db, dType * d_D, dType * d_b, int vocab_size, int LSTM
 // <<<batch_size, 256>>> : each block is responsible for each batch
 template<typename dType>
 __global__
-void cuckoo_lookup(unsigned int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
-                   unsigned int *d_key_1, unsigned int *d_value_1, unsigned int * d_length_1,
-                   unsigned int *d_key_2, unsigned int *d_value_2, unsigned int * d_length_2,
-                   unsigned int *d_bands_index){
+void cuckoo_lookup(int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
+                   int *d_key_1, int *d_value_1, int * d_length_1,
+                   int *d_key_2, int *d_value_2, int * d_length_2,
+                   int *d_bands_index){
     int batch_index = blockIdx.x;
     for (int w_index = threadIdx.x; w_index < W; w_index += blockDim.x){
-        unsigned int code = d_codes[w_index * batch_size + batch_index];
+        int code = d_codes[w_index * batch_size + batch_index];
         //cuckoo lookup;
-        unsigned int key1 = hash_func_1_gpu(code) % vocab_size + w_index * vocab_size;
+        int key1 = (hash_func_1(code) % vocab_size + vocab_size) % vocab_size + w_index * vocab_size;
         int start = -1;
         int length = 0;
         if (d_key_1[key1] == code){
             start = d_value_1[key1];
             length = d_length_1[key1];
         } else {
-            unsigned int key2 = hash_func_2_gpu(code) % vocab_size + w_index * vocab_size;
+            int key2 = (hash_func_2(code) % vocab_size + vocab_size) % vocab_size + w_index * vocab_size;
             if (d_key_2[key2] == code){
                 start = d_value_2[key2];
                 length = d_length_2[key2];
             }
         }
         for (int i = 0 ; i< length; i ++ ){
-            unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+            int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
             atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
         }
     }
 }
 
 // <<<1,256>>>
-__global__ void inc_range(float *d_outputdist, unsigned int * d_bands_index, int start, int length, int w_index, int batch_index, int vocab_size){
+__global__ void inc_range(float *d_outputdist, int * d_bands_index, int start, int length, int w_index, int batch_index, int vocab_size){
     for (int i = threadIdx.x; i < length; i += blockDim.x){
-        unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+        int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
         atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
     }
 }
@@ -3106,22 +3106,22 @@ __global__ void inc_range(float *d_outputdist, unsigned int * d_bands_index, int
 // <<<batch_size, 256>>> : each block is responsible for each batch
 template<typename dType>
 __global__
-void cuckoo_lookup_T(unsigned int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
-                   unsigned int *d_key_1, unsigned int *d_value_1, unsigned int * d_length_1,
-                   unsigned int *d_key_2, unsigned int *d_value_2, unsigned int * d_length_2,
-                   unsigned int *d_bands_index){
+void cuckoo_lookup_T(int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
+                   int *d_key_1, int *d_value_1, int * d_length_1,
+                   int *d_key_2, int *d_value_2, int * d_length_2,
+                   int *d_bands_index){
     int batch_index = blockIdx.x;
     for (int w_index = threadIdx.x; w_index < W; w_index += blockDim.x){
-        unsigned int code = d_codes[w_index + batch_index * W];
+        int code = d_codes[w_index + batch_index * W];
         //cuckoo lookup;
-        unsigned int key1 = hash_func_1_gpu(code) % vocab_size + w_index * vocab_size;
+        int key1 = (hash_func_1(code) % vocab_size +vocab_size) % vocab_size + w_index * vocab_size;
         int start = -1;
         int length = 0;
         if (d_key_1[key1] == code){
             start = d_value_1[key1];
             length = d_length_1[key1];
         } else {
-            unsigned int key2 = hash_func_2_gpu(code) % vocab_size + w_index * vocab_size;
+            int key2 = (hash_func_2(code) % vocab_size + vocab_size ) % vocab_size + w_index * vocab_size;
             if (d_key_2[key2] == code){
                 start = d_value_2[key2];
                 length = d_length_2[key2];
@@ -3133,7 +3133,7 @@ void cuckoo_lookup_T(unsigned int *d_codes, dType *d_outputdist,int batch_size, 
             inc_range<<<1,256,0,s>>>(d_outputdist,d_bands_index,start,length,w_index,batch_index,vocab_size);
         } else {
             for (int i = 0 ; i< length; i ++ ){
-                unsigned int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+                int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
                 atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
             }
         }

@@ -42,32 +42,32 @@ public:
     // all matrix is column major
     int *d_permutes; // [K, P]
     int *h_permutes;
-    unsigned int *d_bands; // [W，vocab_size]
-    unsigned int *h_bands;
+    int *d_bands; // [W，vocab_size]
+    int *h_bands;
     dType *d_Db; // [LSTM_size + 1，vocab_size]
     dType *d_Db_shrink; // [LSTM_size + 1, nnz]
     
     dType *d_h_t_pad; // [LSTM_size + 1, batch_size]
-    unsigned int *d_h_t_pad_codes; // [W, beam_size]
+    int *d_h_t_pad_codes; // [W, beam_size]
 
-    unsigned int *h_bands_index; // [vocab_size, W]
-    unsigned int *d_bands_index; // [vocab_size, W]
+    int *h_bands_index; // [vocab_size, W]
+    int *d_bands_index; // [vocab_size, W]
     
-    unsigned int *h_key_1; // [vocab_size, W]
-    unsigned int *h_value_1; // [vocab_size, W]  record the starts
-    unsigned int *h_length_1; // [vocab_size, W]  record the starts
+    int *h_key_1; // [vocab_size, W]
+    int *h_value_1; // [vocab_size, W]  record the starts
+    int *h_length_1; // [vocab_size, W]  record the starts
     
-    unsigned int *h_key_2; // [vocab_size, W]
-    unsigned int *h_value_2; // [vocab_size, W]  record the starts
-    unsigned int *h_length_2; // [vocab_size, W]  record the starts
+    int *h_key_2; // [vocab_size, W]
+    int *h_value_2; // [vocab_size, W]  record the starts
+    int *h_length_2; // [vocab_size, W]  record the starts
     
-    unsigned int *d_key_1; // [vocab_size, W]
-    unsigned int *d_value_1; // [vocab_size, W]  record the starts
-    unsigned int *d_length_1; // [vocab_size, W]  record the starts
+    int *d_key_1; // [vocab_size, W]
+    int *d_value_1; // [vocab_size, W]  record the starts
+    int *d_length_1; // [vocab_size, W]  record the starts
     
-    unsigned int *d_key_2; // [vocab_size, W]
-    unsigned int *d_value_2; // [vocab_size, W]  record the starts
-    unsigned int *d_length_2; // [vocab_size, W]  record the starts
+    int *d_key_2; // [vocab_size, W]
+    int *d_value_2; // [vocab_size, W]  record the starts
+    int *d_length_2; // [vocab_size, W]  record the starts
     
     dType *d_array; //[vocab_size]
     int *d_index; //[vocab_size]
@@ -99,38 +99,15 @@ public:
     boost::uniform_int<> zero_to_d;
     boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> > * dice;
 
-    unsigned int hash_func_1(unsigned int a){ // hash function on CPU, also need to have a on_device function
-        a = (a+0x7ed55d16) + (a<<12);
-        a = (a^0xc761c23c) ^ (a>>19);
-        a = (a+0x165667b1) + (a<<5);
-        a = (a+0xd3a2646c) ^ (a<<9);
-        a = (a+0xfd7046c5) + (a<<3);
-        a = (a^0xb55a4f09) ^ (a>>16);
-        return a;
-    }
     
-    unsigned int hash_func_2(unsigned int key){ // hash function on CPU, also need to have a on_device function
-        unsigned int c2=0x27d4eb2d; // a prime or an odd constant
-        key = (key ^ 61) ^ (key >> 16);
-        key = key + (key << 3);
-        key = key ^ (key >> 4);
-        key = key * c2;
-        key = key ^ (key >> 15);
-        return key;
-    }
-    
-    void cuckoo_create_hash(unsigned int keys ){
-    
-    }
-    
-    void set_to_n(unsigned int *data, int size, unsigned int n){
+    void set_to_n(int *data, int size, int n){
         for (int i = 0 ; i < size; i ++){
             data[i] = n;
         }
     }
     
     // cpu version of retrival
-    std::vector<std::unordered_map<unsigned int, std::vector<int>>> band_maps;
+    std::vector<std::unordered_map<int, std::vector<int>>> band_maps;
     
     LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
         
@@ -177,42 +154,42 @@ public:
         h_permutes = (int *) malloc(this->K * this->P * sizeof (int));
         
         // d_bands
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands, this->vocab_size * this->W * sizeof(unsigned int)),"d_bands failed\n");
-        h_bands = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands, this->vocab_size * this->W * sizeof(int)),"d_bands failed\n");
+        h_bands = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
 
         // d_bands_index
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands_index, this->vocab_size * this->W * sizeof(unsigned int)),"d_bands_index failed\n");
-        h_bands_index = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_bands_index, this->vocab_size * this->W * sizeof(int)),"d_bands_index failed\n");
+        h_bands_index = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
         
         // d_key_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_key_1 failed\n");
-        h_key_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_1, this->vocab_size * this->W * sizeof(int)),"d_key_1 failed\n");
+        h_key_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
 
         // d_value_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_1 failed\n");
-        h_value_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_1, this->vocab_size * this->W * sizeof(int)),"d_value_1 failed\n");
+        h_value_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
 
         // d_key_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_key_2 failed\n");
-        h_key_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_2, this->vocab_size * this->W * sizeof(int)),"d_key_2 failed\n");
+        h_key_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
 
         // d_value_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
-        h_value_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_2, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_value_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
 
         // d_length_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_1, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
-        h_length_1 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_1, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_length_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
  
         // d_length_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_2, this->vocab_size * this->W * sizeof(unsigned int)),"d_value_2 failed\n");
-        h_length_2 = (unsigned int * ) malloc (this->vocab_size * this->W * sizeof(unsigned int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_2, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_length_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
         
         // d_h_t_pad
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad, (LSTM_size+1) * batch_size * sizeof(dType)),"d_h_t_pad failed\n");
 
         // d_h_t_pad_codes
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad_codes, batch_size * this->W * sizeof(unsigned int)),"d_codes failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad_codes, batch_size * this->W * sizeof(int)),"d_codes failed\n");
         
         // d_array
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_array, this->vocab_size * sizeof(dType)),"d_array failed\n");
@@ -260,7 +237,7 @@ public:
         }
         // prepare map
         for (int i = 0; i < this-> W; i ++){
-            std::unordered_map<unsigned int, std::vector<int>> map;
+            std::unordered_map<int, std::vector<int>> map;
             band_maps.push_back(map);
         }
         
@@ -298,12 +275,12 @@ public:
         }
         //create hash_code
         
-        unsigned int *h_codes;
-        unsigned int *d_codes;
+        int *h_codes;
+        int *d_codes;
         
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_codes, batch_size * this->W * sizeof(unsigned int)),"d_codes failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_codes, batch_size * this->W * sizeof(int)),"d_codes failed\n");
 
-        h_codes = (unsigned int * ) malloc(batch_size * this->W * sizeof(unsigned int));
+        h_codes = (int * ) malloc(batch_size * this->W * sizeof(int));
         
         hash_code(d_codes, d_h_t_pad, batch_size);
         CUDA_GET_LAST_ERROR("hash_code in topm");
@@ -313,7 +290,7 @@ public:
             print_matrix_gpu(d_codes, batch_size, this->W);
         }
         
-        CUDA_ERROR_WRAPPER(cudaMemcpy(h_codes, d_codes, batch_size * this->W * sizeof(unsigned int),cudaMemcpyDeviceToHost),"d_codes to h_codes");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_codes, d_codes, batch_size * this->W * sizeof(int),cudaMemcpyDeviceToHost),"d_codes to h_codes");
         
         // get top_ids
         
@@ -571,10 +548,10 @@ public:
     }
     
     
-    void get_top_m_cpu(unsigned int *h_codes, int * h_top_ids, int m, int batch_index, int batch_size){
+    void get_top_m_cpu(int *h_codes, int * h_top_ids, int m, int batch_index, int batch_size){
         std::unordered_map<int, int> counts;
         for (int i = 0; i < this->W; i ++ ){
-            unsigned int code = h_codes[i * batch_size + batch_index];
+            int code = h_codes[i * batch_size + batch_index];
             if (this->band_maps[i].count(code) > 0){
                 std::vector<int> & ids = this->band_maps[i][code];
                 for (int j=0; j<ids.size(); j++){
@@ -626,10 +603,10 @@ public:
         
         
         
-        cudaMemcpy(h_bands, d_bands, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_bands, d_bands, this->vocab_size * this->W * sizeof(int),cudaMemcpyDeviceToHost);
         for (int i = 0 ; i < this->W; i ++){
             for (int j= 0 ; j < vocab_size ; j ++ ){
-                unsigned int code = h_bands[i + j * this->W];
+                int code = h_bands[i + j * this->W];
                 if (band_maps[i].count(code) == 0){
                     band_maps[i][code] = std::vector<int>();
                 }
@@ -660,10 +637,10 @@ public:
         for (int i =0 ; i < this->W; i ++){
             int start = 0;
             for (auto &item : band_maps[i] ){
-                unsigned int code = item.first;
+                int code = item.first;
                 std::vector<int> &word_indexes = item.second;
-                unsigned int value = start;
-                unsigned int length = word_indexes.size();
+                int value = start;
+                int length = word_indexes.size();
                 
                 // add the bands and bands_index
                 for (int j = 0; j < word_indexes.size(); j++){
@@ -676,7 +653,7 @@ public:
                 int side = 0;
                 while (true){
                     if (side == 0){
-                        unsigned int key = this->hash_func_1(code) % this->vocab_size + i * this->vocab_size;
+                        int key = (hash_func_1(code) % this->vocab_size + this->vocab_size) % this->vocab_size + i * this->vocab_size;
                         
                         if (this->h_key_1[key] == -1){
                             this->h_key_1[key] = code;
@@ -684,9 +661,9 @@ public:
                             this->h_length_1[key] = length;
                             break;
                         } else {
-                            unsigned int temp_code = this->h_key_1[key];
-                            unsigned int temp_value = this->h_value_1[key];
-                            unsigned int temp_length = this->h_length_1[key];
+                            int temp_code = this->h_key_1[key];
+                            int temp_value = this->h_value_1[key];
+                            int temp_length = this->h_length_1[key];
                             this->h_key_1[key] = code;
                             this->h_value_1[key] = value;
                             this->h_length_1[key] = length;
@@ -696,16 +673,16 @@ public:
                             side = 1;
                         }
                     } else {
-                        unsigned int key = this->hash_func_2(code) % this->vocab_size + i * this->vocab_size;
+                        int key = ( hash_func_2(code) % this->vocab_size + this->vocab_size) % this->vocab_size + i * this->vocab_size;
                         if (this->h_key_2[key] == -1){
                             this->h_key_2[key] = code;
                             this->h_value_2[key] = value;
                             this->h_length_2[key] = length;
                             break;
                         } else {
-                            unsigned int temp_code = this->h_key_2[key];
-                            unsigned int temp_value = this->h_value_2[key];
-                            unsigned int temp_length = this->h_length_2[key];
+                            int temp_code = this->h_key_2[key];
+                            int temp_value = this->h_value_2[key];
+                            int temp_length = this->h_length_2[key];
                             this->h_key_2[key] = code;
                             this->h_value_2[key] = value;
                             this->h_length_2[key] = length;
@@ -736,8 +713,8 @@ public:
             for (int i =0 ; i< this->W; i ++ ){
             for (int j =0 ; j< this->vocab_size; j ++ ){
 
-                    unsigned int code = this->h_bands[i*this->vocab_size + j];
-                    unsigned int key = this->hash_func_1(code) % this->vocab_size;
+                    int code = this->h_bands[i*this->vocab_size + j];
+                int key = (hash_func_1(code) % this->vocab_size + this->vocab_size) % this->vocab_size ;
                     std::cout<< key << " ";
                 }
                 std::cout<< "\n";
@@ -745,8 +722,8 @@ public:
             std::cout<< "band after hash_code 2 \n";
             for (int i =0 ; i< this->W; i ++ ){
                 for (int j =0 ; j< this->vocab_size; j ++ ){
-                    unsigned int code = this->h_bands[j*this->W + i];
-                    unsigned int key = this->hash_func_2(code) % this->vocab_size;
+                    int code = this->h_bands[j*this->W + i];
+                    int key = (hash_func_2(code) % this->vocab_size + this->vocab_size) % this->vocab_size ;
                     std::cout<< key << " ";
                 }
                 std::cout<< "\n";
@@ -754,19 +731,19 @@ public:
         }
 
         // copy to GPU
-        cudaMemcpy(d_bands, h_bands, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_bands_index, h_bands_index, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_key_1, h_key_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_key_2, h_key_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_value_1, h_value_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_value_2, h_value_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_length_1, h_length_1, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_length_2, h_length_2, this->vocab_size * this->W * sizeof(unsigned int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_bands, h_bands, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_bands_index, h_bands_index, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_1, h_key_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_2, h_key_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_1, h_value_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_2, h_value_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_1, h_length_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_2, h_length_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
 
     }
     
     
-    void hash_code(unsigned int *d_codes, dType *d_vectors, int n_vectors){
+    void hash_code(int *d_codes, dType *d_vectors, int n_vectors){
         // d_vectors : [LSTM_size, beam_size]
         // d_code: [W,beam_size]
         //hash_code_kernel<<<this->W, std::min(n_vectors, 256)>>>(d_codes, d_vectors, d_permutes, this->P, this->W, this->K, this->units_per_band, bits_per_band ,n_vectors);
