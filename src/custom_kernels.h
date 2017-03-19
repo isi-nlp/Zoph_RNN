@@ -2829,6 +2829,7 @@ __global__
 void hash_code_kernel(int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector) {
     // bits_per_band = log2(K) * units_per_band;
     int band_index = blockIdx.x;
+    int bits_to_shift = bits_per_band / units_per_band ;
     for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
         int code = 0;
         for (int u = 0 ; u < units_per_band; u ++ ){
@@ -2842,7 +2843,7 @@ void hash_code_kernel(int *d_codes, dType *d_vectors, int * d_permutes, int P, i
                     max_index = p;
                 }
             }
-            code = (code << bits_per_band) + max_index;
+            code = (code << bits_to_shift) + max_index;
         }
         int code_index = band_index * n_vector + vocab_index;
         d_codes[code_index] = code;
@@ -2859,6 +2860,7 @@ __global__
 void hash_code_kernel_T(int *d_codes, dType *d_vectors, int * d_permutes, int P, int W, int K, int units_per_band, int bits_per_band, int n_vector, int LSTM_size) {
     // bits_per_band = log2(K) * units_per_band;
     int band_index = blockIdx.x * blockDim.y + threadIdx.y;
+    int bits_to_shift = bits_per_band / units_per_band ;
     //int band_index = blockIdx.x;
     for (int vocab_index = threadIdx.x; vocab_index < n_vector; vocab_index += blockDim.x) {
         int code = 0;
@@ -2873,7 +2875,7 @@ void hash_code_kernel_T(int *d_codes, dType *d_vectors, int * d_permutes, int P,
                     max_index = p;
                 }
             }
-            code = (code << bits_per_band) + max_index;
+            code = (code << bits_to_shift) + max_index;
         }
         d_codes[IDX2C(band_index, vocab_index, W)] = code;
     }
@@ -3106,40 +3108,107 @@ __global__ void inc_range(float *d_outputdist, int * d_bands_index, int start, i
 // <<<batch_size, 256>>> : each block is responsible for each batch
 template<typename dType>
 __global__
-void cuckoo_lookup_T(int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
-                   int *d_key_1, int *d_value_1, int * d_length_1,
-                   int *d_key_2, int *d_value_2, int * d_length_2,
-                   int *d_bands_index){
+void cuckoo_lookup_T(int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W, int index_size,
+                       int *d_key_1, int *d_value_1, int * d_length_1,
+                       int *d_key_2, int *d_value_2, int * d_length_2,
+                       int *d_bands_index){
     int batch_index = blockIdx.x;
+    const int maxThreads = 1024;
+    __shared__ int s_w_index[maxThreads];
+    __shared__ int s_start[maxThreads];
+    __shared__ int s_length[maxThreads];
+    
     for (int w_index = threadIdx.x; w_index < W; w_index += blockDim.x){
         int code = d_codes[w_index + batch_index * W];
         //cuckoo lookup;
-        int key1 = (hash_func_1(code) % vocab_size +vocab_size) % vocab_size + w_index * vocab_size;
+        int key1 = (hash_func_1(code) % index_size + index_size) % index_size + w_index * index_size;
         int start = -1;
         int length = 0;
         if (d_key_1[key1] == code){
             start = d_value_1[key1];
             length = d_length_1[key1];
         } else {
-            int key2 = (hash_func_2(code) % vocab_size + vocab_size ) % vocab_size + w_index * vocab_size;
+            int key2 = (hash_func_2(code) % index_size + index_size) % index_size + w_index * index_size;
             if (d_key_2[key2] == code){
                 start = d_value_2[key2];
                 length = d_length_2[key2];
             }
         }
-        if (length >= 256){
-            cudaStream_t s;
-            cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
-            inc_range<<<1,256,0,s>>>(d_outputdist,d_bands_index,start,length,w_index,batch_index,vocab_size);
-        } else {
-            for (int i = 0 ; i< length; i ++ ){
-                int word_index = d_bands_index[IDX2C(start + i, w_index, vocab_size)];
+        
+        s_w_index[threadIdx.x] = w_index;
+        s_start[threadIdx.x] = start;
+        s_length[threadIdx.x] = length;
+        
+        int i_start = (threadIdx.x / 32) * 32;
+        for (int i = i_start; i < i_start + 32 && i < blockDim.x; i++){
+            int _w_index = s_w_index[i];
+            int _start = s_start[i];
+            int _length = s_length[i];
+            for (int j = threadIdx.x % 32; j < _length; j += 32){
+                int word_index = d_bands_index[IDX2C(_start + j, _w_index, vocab_size)];
                 atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+            } 
+        }
+        
+    }
+}
+
+template<typename dType>
+__global__
+void cuckoo_lookup_T_2(int *d_codes, dType *d_outputdist,int batch_size, int vocab_size, int W,
+                       int *d_key_1, int *d_value_1, int * d_length_1,
+                       int *d_key_2, int *d_value_2, int * d_length_2,
+                       int *d_bands_index){
+    int batch_index = blockIdx.x;
+    const int maxThreads = 1024;
+    __shared__ int s_w_index[maxThreads];
+    __shared__ int s_start[maxThreads];
+    __shared__ int s_length[maxThreads];
+    
+    for (int w_index = threadIdx.x; w_index < W; w_index += blockDim.x){
+        int code = d_codes[w_index + batch_index * W];
+        //cuckoo lookup;
+        int key1 = (hash_func_1(code) % vocab_size + vocab_size) % vocab_size + w_index * vocab_size;
+        int start = -1;
+        int length = 0;
+        if (d_key_1[key1] == code){
+            start = d_value_1[key1];
+            length = d_length_1[key1];
+        } else {
+            int key2 = (hash_func_2(code) % vocab_size + vocab_size) % vocab_size + w_index * vocab_size;
+            if (d_key_2[key2] == code){
+                start = d_value_2[key2];
+                length = d_length_2[key2];
+            }
+        }
+        
+        s_w_index[threadIdx.x] = w_index;
+        s_start[threadIdx.x] = start;
+        s_length[threadIdx.x] = length;
+        
+        __syncthreads();
+        
+        
+        int n_alive_thread = (w_index >= W / blockDim.x * blockDim.x ) ? W - W / blockDim.x * blockDim.x : blockDim.x;
+        int i_start = (threadIdx.x / 32) * 32;
+        int nalive_thread_in_warp = (blockDim.x - i_start > 32) ? 32 : blockDim.x - i_start;
+        
+        int ii = threadIdx.x % 32;
+        while(ii < n_alive_thread){
+            int _length = atomicSub(s_length+ii, 1);
+            if (_length > 0){
+                int _w_index = s_w_index[ii];
+                int _start = atomicAdd(s_start+ii, 1);
+                int word_index = d_bands_index[IDX2C(_start, _w_index, vocab_size)];
+                atomicAdd(&d_outputdist[IDX2C(word_index, batch_index, vocab_size)], 1.0);
+            } else {
+                ii += nalive_thread_in_warp;
             }
         }
     }
-   
 }
+
+
 
 
 // for shrink the target vocab set;
@@ -3156,48 +3225,68 @@ void shrink_vocab(dType *d_D_shrink, dType *d_D, dType *d_b_shrink, dType * d_b,
     }
 }
 
-__global__
-void dense2array(float *matrix, int vocab_size, int batch_size, float *array, int* index_array, int topn, int threshold){
-    int vocab_index = threadIdx.x + blockIdx.x * blockDim.x;
+
+// dense matrix 2 array
+// matrix [vocab, batch]
+// <<<vocab/256,256>>>
+__global__ void dense2array(float *matrix, int vocab_size, int batch_size, int* index_array, int topn, int threshold, int *n){
+    const int nthreads = 256;
+    int vocab_index = threadIdx.x + blockIdx.x * blockDim.x + topn;
+    
+    __shared__ int index_array_shared[nthreads];
+    __shared__ int index_array_shared_2[nthreads];
+    __shared__ int temp_n_globals[nthreads/32];
+    __shared__ int temp_ns[nthreads/32];
     if (vocab_index < vocab_size){
-        if (vocab_index < topn){
-            array[vocab_index] = 1.f;
-            index_array[vocab_index] = vocab_index;
-        } else {
-            float dest_val = 0;
-            for (int batch_index = 0 ; batch_index < batch_size; batch_index ++){
-                float val = matrix[batch_index * vocab_size + vocab_index];
-                if (val >= threshold){
-                    dest_val = 1;
-                    break;
-                }
+        int dest_val = 0;
+        for (int batch_index = 0 ; batch_index < batch_size; batch_index ++){
+            float val = matrix[batch_index * vocab_size + vocab_index];
+            if (val >= threshold){
+                dest_val = 1;
+                break;
             }
-            array[vocab_index] = dest_val;
-            if (dest_val == 0){
-                index_array[vocab_index] = -1;
-            } else {
-                index_array[vocab_index] = vocab_index;
-            }
-            
         }
+        if (dest_val == 0){
+            index_array_shared[threadIdx.x] = -1;
+        } else {
+            index_array_shared[threadIdx.x] = vocab_index;
+        }
+    } else {
+        index_array_shared[threadIdx.x] = -1;
     }
+    if (threadIdx.x % 32 == 0){
+        int temp_n = 0;
+        for (int i = threadIdx.x; i < threadIdx.x + 32; i++){
+            if (index_array_shared[i] != -1){
+                index_array_shared_2[threadIdx.x + temp_n] = index_array_shared[i];
+                temp_n += 1;
+            }
+        }
+        temp_n_globals[threadIdx.x/32] = atomicAdd(n, temp_n);
+        temp_ns[threadIdx.x / 32] = temp_n;
+    }
+    
+    if (threadIdx.x % 32 < temp_ns[threadIdx.x / 32]){
+        index_array[threadIdx.x % 32 + temp_n_globals[threadIdx.x / 32]] = index_array_shared_2[threadIdx.x];
+    }  
+    
 }
+
+
 
 // rowIdx: [nnz]
 // <<<(nnz+2-1)/2, (512,2)>>>
 __global__
-void fill_new_db(float *d_new_db, float* d_db, int *rowIdx, int embed, int nnz){
-    int row_index = threadIdx.y + blockIdx.x * blockDim.y;
+void fill_new_db(float *d_new_db, float* d_db, int *rowIdx, int embed, int nnz, int topn){
+    int row_index = threadIdx.y + blockIdx.x * blockDim.y + topn;
     if (row_index < nnz){
         int vocab_index = rowIdx[row_index];
-        //float s = 0;
         for (int i = threadIdx.x ; i < embed ; i+=blockDim.x){
             d_new_db[row_index*embed + i] = d_db[vocab_index*embed + i];
-            
-            //s += d_db[vocab_index*embed + i];
         }
     }
 }
+
 
 struct non_negative
 {

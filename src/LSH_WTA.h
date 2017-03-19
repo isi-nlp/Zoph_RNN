@@ -28,6 +28,9 @@
 template<typename dType>
 class LSH_WTA {
 public:
+    
+    softmax_layer<dType> * p_softmax_layer;
+    
     int K = 8;
     int units_per_band = 2;
     int bits_per_band = 6;
@@ -74,6 +77,7 @@ public:
     int *d_rowIdx; //[vocab_size];
     int *h_index;
     int *h_rowIdx;
+    int *d_nnz, *h_nnz;
     
     thrust::device_ptr<int> thrust_index;
     thrust::device_ptr<int> thrust_rowIdx;
@@ -81,7 +85,6 @@ public:
     
     dType* d_outputdist_shrink; //[vocab_size, batch_size];
     
-    Timer timer;
     bool show_debug_info = false;
     bool show_debug_info_2 = false;
     bool dump_file = false;
@@ -90,6 +93,7 @@ public:
     int threshold = 1;
     float fnnz;
     int nnz;
+    int index_size;
     
     int debug_code;
     
@@ -109,7 +113,7 @@ public:
     // cpu version of retrival
     std::vector<std::unordered_map<int, std::vector<int>>> band_maps;
     
-    LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code){
+    LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code, softmax_layer<dType> * p_softmax_layer){
         
         
         if (debug_code % 2 == 1){
@@ -132,6 +136,8 @@ public:
 
         this->debug_code = debug_code;
         
+        this->p_softmax_layer = p_softmax_layer;
+        
         this->m = m;
         this->K = K;
         this->units_per_band = units_per_band;
@@ -145,6 +151,7 @@ public:
         this->batch_size = batch_size;
         this->threshold = WTA_threshold;
         this->topn = WTA_topn;
+        this->index_size = this->vocab_size * 2;
         
         zero_to_d = boost::uniform_int<>(0,d-1);
         dice = new boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> >(gen, zero_to_d);
@@ -162,28 +169,28 @@ public:
         h_bands_index = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
         
         // d_key_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_1, this->vocab_size * this->W * sizeof(int)),"d_key_1 failed\n");
-        h_key_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_1, this->index_size * this->W * sizeof(int)),"d_key_1 failed\n");
+        h_key_1 = (int * ) malloc (this->index_size * this->W * sizeof(int));
 
         // d_value_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_1, this->vocab_size * this->W * sizeof(int)),"d_value_1 failed\n");
-        h_value_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_1, this->index_size * this->W * sizeof(int)),"d_value_1 failed\n");
+        h_value_1 = (int * ) malloc (this->index_size * this->W * sizeof(int));
 
         // d_key_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_2, this->vocab_size * this->W * sizeof(int)),"d_key_2 failed\n");
-        h_key_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_key_2, this->index_size * this->W * sizeof(int)),"d_key_2 failed\n");
+        h_key_2 = (int * ) malloc (this->index_size * this->W * sizeof(int));
 
         // d_value_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_2, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
-        h_value_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_value_2, this->index_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_value_2 = (int * ) malloc (this->index_size * this->W * sizeof(int));
 
         // d_length_1
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_1, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
-        h_length_1 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_1, this->index_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_length_1 = (int * ) malloc (this->index_size * this->W * sizeof(int));
  
         // d_length_2
-        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_2, this->vocab_size * this->W * sizeof(int)),"d_value_2 failed\n");
-        h_length_2 = (int * ) malloc (this->vocab_size * this->W * sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_length_2, this->index_size * this->W * sizeof(int)),"d_value_2 failed\n");
+        h_length_2 = (int * ) malloc (this->index_size * this->W * sizeof(int));
         
         // d_h_t_pad
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_h_t_pad, (LSTM_size+1) * batch_size * sizeof(dType)),"d_h_t_pad failed\n");
@@ -197,13 +204,18 @@ public:
         // d_index d_rowIdx
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_index, this->vocab_size * sizeof(int)),"d_index failed\n");
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_rowIdx, this->vocab_size * sizeof(int)),"d_rowIdx failed\n");
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_nnz, sizeof(int)),"d_nnz failed\n");
+        
         
         h_index = (int * ) malloc (this->vocab_size  * sizeof(int));
         h_rowIdx = (int * ) malloc (this->vocab_size  * sizeof(int));
-
-
+        h_nnz = (int * ) malloc (sizeof(int));
         
-        
+        for(int i = 0; i < this->topn; i++){
+            h_rowIdx[i] = i;
+        }
+        cudaMemcpy(d_rowIdx, h_rowIdx, this->topn * sizeof (int),cudaMemcpyHostToDevice);
+
         // d_outputdist_shrink
         CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_outputdist_shrink, this->vocab_size * this->batch_size * sizeof(dType)),"d_outputdist_shrink failed\n");
 
@@ -223,8 +235,9 @@ public:
             print_matrix_gpu(d_Db, LSTM_size + 1, vocab_size);
         }
         
-        
-        
+        // preload d_Db_shrink
+        cudaMemcpy(d_Db_shrink, d_Db, this->topn * this->d * sizeof (float),cudaMemcpyDeviceToDevice);
+
         // get permute
         for (int i =0 ; i < this->P; i++){
             this->get_permute(this->d, this->K, h_permutes+i*this->K);
@@ -371,20 +384,40 @@ public:
     void topm(dType *d_outputdist, dType *d_h_t, int batch_size){
         //outside base = 0.0466403 sec
         // prepare d_h_t_pad 0.0004s
-        pad_h_t<<<batch_size, std::min(1024, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
-        CUDA_GET_LAST_ERROR("pad_h_t");
+        
+        
+#ifdef TIMER_DEBUG
+        if ((debug_code >> 3) % 2 == 0) {
+            p_softmax_layer->model->timer.start("pad_h_t");
+#endif
+            pad_h_t<<<batch_size, std::min(1024, LSTM_size+1)>>>(d_h_t_pad, d_h_t, LSTM_size, batch_size);
+            CUDA_GET_LAST_ERROR("pad_h_t");
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("pad_h_t");
+        }
+#endif
         
         //create hash_code for d_h_t_pad 0.013s
+#ifdef TIMER_DEBUG
+        if ((debug_code >> 4) % 2 == 0) {
+            p_softmax_layer->model->timer.start("hash_code");
+#endif
         hash_code(d_h_t_pad_codes, d_h_t_pad, batch_size);
         CUDA_GET_LAST_ERROR("hash_code in topm");
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("hash_code");
+        }
+#endif
         
-        //fill d_outputdist 0.06s
-        //thrust::device_ptr<dType> thrust_d_outputdist = thrust::device_pointer_cast(d_outputdist);
-        //thrust::fill(thrust::cuda::par, thrust_d_outputdist, thrust_d_outputdist + vocab_size * batch_size , NEG_FILL);
-        //CUDA_GET_LAST_ERROR("thrust::fill");
-
+        
         // 0.001s
         cudaMemset(d_outputdist, 0, vocab_size * batch_size* sizeof(dType));
+        
+        
+#ifdef TIMER_DEBUG
+
         calltime += 1;
         
         if (calltime == 2 && dump_file){
@@ -399,27 +432,27 @@ public:
             output.close();
             
             output.open("d_key1_input.txt");
-            write_matrix_GPU(this->d_key_1,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_key_1,index_size,this->W,output);
             output.close();
 
             output.open("d_value1_input.txt");
-            write_matrix_GPU(this->d_value_1,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_value_1,index_size,this->W,output);
             output.close();
             
             output.open("d_length1_input.txt");
-            write_matrix_GPU(this->d_length_1,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_length_1,index_size,this->W,output);
             output.close();
             
             output.open("d_key2_input.txt");
-            write_matrix_GPU(this->d_key_2,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_key_2,index_size,this->W,output);
             output.close();
             
             output.open("d_value2_input.txt");
-            write_matrix_GPU(this->d_value_2,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_value_2,index_size,this->W,output);
             output.close();
 
             output.open("d_length2_input.txt");
-            write_matrix_GPU(this->d_length_2,vocab_size,this->W,output);
+            write_matrix_GPU(this->d_length_2,index_size,this->W,output);
             output.close();
 
             output.open("d_bands_index_input.txt");
@@ -429,12 +462,23 @@ public:
             
         }
         
+#endif
+        
         //search for the top ids: d_outputdist[top_id] = 1; //
-        if ((debug_code >> 3) % 2 == 0) {
-        cuckoo_lookup_T<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
-        CUDA_GET_LAST_ERROR("cuckoo_lookup");
-        }
+#ifdef TIMER_DEBUG
+            if ((debug_code >> 5) % 2 == 0) {
+                p_softmax_layer->model->timer.start("lookup");
+#endif
+                
+                cuckoo_lookup_T<<<batch_size, std::min(1024,this->W)>>>(d_h_t_pad_codes, d_outputdist, batch_size, this->vocab_size, this->W, this->index_size, this->d_key_1, this->d_value_1, this->d_length_1, this->d_key_2, this->d_value_2, this->d_length_2, this->d_bands_index);
+#ifdef TIMER_DEBUG
+                CUDA_GET_LAST_ERROR("cuckoo_lookup");
+                cudaDeviceSynchronize();
+                p_softmax_layer->model->timer.end("lookup");
+            }
+#endif
 
+#ifdef TIMER_DEBUG
         if (calltime == 2 && dump_file){
             cudaDeviceSynchronize();
 
@@ -450,64 +494,55 @@ public:
             write_matrix_GPU(d_Db,LSTM_size+1,batch_size,o_ht_pad);
             o_ht_pad.close();
         }
-
-        // do sparse matrix multiplication
-        
+#endif
         
         // dense2array
-        if ((debug_code >> 4) % 2 == 0) {
-
-        cudaMemset(d_array, 0, vocab_size * sizeof(dType));
-        cudaMemset(d_index, 0, vocab_size * sizeof(int));
-        cudaMemset(d_rowIdx, 0, vocab_size * sizeof(int));
-            
-        }
-        
-        if ((debug_code >> 5) % 2 == 0) {
-
-        int thread_size = 256;
-        dim3 threads(thread_size);
-        dim3 grid((this->vocab_size+threads.x-1)/threads.x);
-        dense2array<<<grid, threads>>>(d_outputdist, this->vocab_size, this->batch_size, d_array, d_index, this->topn, this->threshold); //0.02ms
-        }
-        
+#ifdef TIMER_DEBUG
         if ((debug_code >> 6) % 2 == 0) {
-        // stream compaction
-        cublasSasum(cublasHandle, this->vocab_size, d_array, 1, &fnnz); // 0.01ms
-        }
-        
-        if ((debug_code >> 7) % 2 == 0) {
-            //std::cout<<"d_index b\n";
-            //print_matrix_gpu(d_index, 20, 1);
-            //std::cout<<"d_index b\n";
-            //print_matrix_gpu(d_rowIdx, 20, 1);
-            
+            p_softmax_layer->model->timer.start("dense2array");
+#endif
 
+            this->h_nnz[0] = this->topn;
+            cudaMemcpy(this->d_nnz, this->h_nnz, sizeof(int), cudaMemcpyHostToDevice);
             
-            compact(h_index, h_rowIdx, d_index, d_rowIdx, this->vocab_size);
-            //thrust::copy_if(thrust::cuda::par, d_index, d_index + this->vocab_size , d_rowIdx, non_negative()); //0.9ms
-            //CUDA_GET_LAST_ERROR("copy_if");
-            //thrust::copy_if(thrust_index, thrust_index + this->vocab_size , thrust_rowIdx, non_negative()); //0.09ms
+            int thread_size = 256;
+            dim3 threads(thread_size);
+            dim3 grid((this->vocab_size+threads.x-1)/threads.x);
+
+            dense2array<<<grid, threads>>>(d_outputdist, this->vocab_size, this->batch_size, d_rowIdx, this->topn, this->threshold, this->d_nnz); //0.02ms
             
-            //std::cout<<"d_index a\n";
-            //print_matrix_gpu(d_index, 20, 1);
-            //std::cout<<"d_index a\n";
-            //print_matrix_gpu(d_rowIdx, 20, 1);
-            
+            cudaMemcpy(h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost);
+            nnz = h_nnz[0];
+
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("dense2array");
         }
-        nnz = std::floor(fnnz);
+#endif
+
         
         std::cout<<"NNZ: "<< nnz << '\n';
         
         // fill_new_db
-        if ((debug_code >> 8) % 2 == 0) {
+#ifdef TIMER_DEBUG
+        if ((debug_code >> 7) % 2 == 0) {
+            p_softmax_layer->model->timer.start("fill_new_db");
+#endif
 
         int thread_x = 256;
         int thread_y = 256/ thread_x;
-        fill_new_db<<<dim3((nnz+thread_y-1)/thread_y),dim3(thread_x,thread_y)>>>(d_Db_shrink,d_Db,d_rowIdx,this->d, nnz); // 0.47 ms
+        fill_new_db<<<dim3((nnz - this->topn +thread_y-1)/thread_y),dim3(thread_x,thread_y)>>>(d_Db_shrink,d_Db,d_rowIdx,this->d, nnz, this->topn); // 0.47 ms
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("fill_new_db");
         }
+#endif
+
         
-        if ((debug_code >> 9) % 2 == 0) {
+#ifdef TIMER_DEBUG
+        if ((debug_code >> 8) % 2 == 0) {
+            p_softmax_layer->model->timer.start("gemm");
+#endif
         float alpha = 1.f, beta = 0.f;
         cublasSgemm(cublasHandle,
                     CUBLAS_OP_T, CUBLAS_OP_N,
@@ -516,16 +551,29 @@ public:
                     d_h_t_pad, this->d,
                     &beta,
                     d_outputdist_shrink, nnz); //1.2 ms
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("gemm");
         }
-        
-        if ((debug_code >> 10) % 2 == 0) {
-        fill_number<<<dim3((this->vocab_size+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,this->vocab_size,this->batch_size,(float)-1000.0);
-        }
-        
-        if ((debug_code >> 11) % 2 == 0) {
-        array2dense<<<dim3((nnz+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,d_outputdist_shrink,d_rowIdx,this->vocab_size,nnz);
-        }
+#endif
 
+        
+#ifdef TIMER_DEBUG
+        if ((debug_code >> 9) % 2 == 0) {
+            p_softmax_layer->model->timer.start("array2dense");
+#endif
+            fill_number<<<dim3((this->vocab_size+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,this->vocab_size,this->batch_size,(float)-1000.0);
+            array2dense<<<dim3((nnz+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,d_outputdist_shrink,d_rowIdx,this->vocab_size,nnz);
+#ifdef TIMER_DEBUG
+            cudaDeviceSynchronize();
+            p_softmax_layer->model->timer.end("array2dense");
+        }
+#endif
+
+        
+#ifdef TIMER_DEBUG
+        p_softmax_layer->model->timer.report();
+        
         if (calltime == 2 && dump_file) {
             cudaDeviceSynchronize();
 
@@ -534,7 +582,6 @@ public:
             o_outputdist.close();
         }
         
-        
         if (show_debug_info_2){
             cudaDeviceSynchronize();
 
@@ -542,9 +589,8 @@ public:
             print_matrix_gpu(d_h_t_pad_codes, this->W, batch_size);
             std::cout<<"d_outputdist\n";
             print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
-            
         }
-        
+#endif
     }
     
     
@@ -620,12 +666,12 @@ public:
         this->create_hash_cpu();
         
         // create the cuckoo hash
-        set_to_n(this->h_key_1, this->vocab_size * this->W, -1);
-        set_to_n(this->h_key_2, this->vocab_size * this->W, -1);
-        set_to_n(this->h_value_1, this->vocab_size * this->W, -1);
-        set_to_n(this->h_value_2, this->vocab_size * this->W, -1);
-        set_to_n(this->h_length_1, this->vocab_size * this->W, -1);
-        set_to_n(this->h_length_2, this->vocab_size * this->W, -1);
+        set_to_n(this->h_key_1, this->index_size * this->W, -1);
+        set_to_n(this->h_key_2, this->index_size * this->W, -1);
+        set_to_n(this->h_value_1, this->index_size * this->W, -1);
+        set_to_n(this->h_value_2, this->index_size * this->W, -1);
+        set_to_n(this->h_length_1, this->index_size * this->W, -1);
+        set_to_n(this->h_length_2, this->index_size * this->W, -1);
 
         if (show_debug_info_2){
             std::cout<< "h_bands before \n";
@@ -651,9 +697,14 @@ public:
                 
                 // hash (code,value) into cuckoo
                 int side = 0;
+                int n_time = 0;
                 while (true){
+                    if (n_time > 2000){
+                        std::cout<<"Index need to rehash!\n";
+                    }
+                    n_time += 1;
                     if (side == 0){
-                        int key = (hash_func_1(code) % this->vocab_size + this->vocab_size) % this->vocab_size + i * this->vocab_size;
+                        int key = (hash_func_1(code) % this->index_size + this->index_size) % this->index_size + i * this->index_size;
                         
                         if (this->h_key_1[key] == -1){
                             this->h_key_1[key] = code;
@@ -673,7 +724,7 @@ public:
                             side = 1;
                         }
                     } else {
-                        int key = ( hash_func_2(code) % this->vocab_size + this->vocab_size) % this->vocab_size + i * this->vocab_size;
+                        int key = ( hash_func_2(code) % this->index_size + this->index_size) % this->index_size + i * this->index_size;
                         if (this->h_key_2[key] == -1){
                             this->h_key_2[key] = code;
                             this->h_value_2[key] = value;
@@ -702,19 +753,19 @@ public:
             std::cout<< "h_bands_index after \n";
             print_matrix(this->h_bands_index,  this->vocab_size,this->W);
             std::cout<< "h_key_1 after \n";
-            print_matrix(this->h_key_1, this->vocab_size, this->W);
+            print_matrix(this->h_key_1, this->index_size, this->W);
             std::cout<< "h_value_1 after \n";
-            print_matrix(this->h_value_1, this->vocab_size, this->W);
+            print_matrix(this->h_value_1, this->index_size, this->W);
             std::cout<< "h_key_2 after \n";
-            print_matrix(this->h_key_2, this->vocab_size, this->W);
+            print_matrix(this->h_key_2, this->index_size, this->W);
             std::cout<< "h_value_2 after \n";
-            print_matrix(this->h_value_2, this->vocab_size, this->W);
+            print_matrix(this->h_value_2, this->index_size, this->W);
             std::cout<< "band after hash_code 1 \n";
             for (int i =0 ; i< this->W; i ++ ){
             for (int j =0 ; j< this->vocab_size; j ++ ){
 
                     int code = this->h_bands[i*this->vocab_size + j];
-                int key = (hash_func_1(code) % this->vocab_size + this->vocab_size) % this->vocab_size ;
+                int key = (hash_func_1(code) % this->index_size + this->index_size) % this->index_size ;
                     std::cout<< key << " ";
                 }
                 std::cout<< "\n";
@@ -723,7 +774,7 @@ public:
             for (int i =0 ; i< this->W; i ++ ){
                 for (int j =0 ; j< this->vocab_size; j ++ ){
                     int code = this->h_bands[j*this->W + i];
-                    int key = (hash_func_2(code) % this->vocab_size + this->vocab_size) % this->vocab_size ;
+                    int key = (hash_func_2(code) % this->index_size + this->index_size) % this->index_size ;
                     std::cout<< key << " ";
                 }
                 std::cout<< "\n";
@@ -733,12 +784,12 @@ public:
         // copy to GPU
         cudaMemcpy(d_bands, h_bands, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
         cudaMemcpy(d_bands_index, h_bands_index, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_key_1, h_key_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_key_2, h_key_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_value_1, h_value_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_value_2, h_value_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_length_1, h_length_1, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
-        cudaMemcpy(d_length_2, h_length_2, this->vocab_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_1, h_key_1, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_key_2, h_key_2, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_1, h_value_1, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_value_2, h_value_2, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_1, h_length_1, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
+        cudaMemcpy(d_length_2, h_length_2, this->index_size * this->W * sizeof(int),cudaMemcpyHostToDevice);
 
     }
     

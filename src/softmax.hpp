@@ -328,7 +328,7 @@ void softmax_layer<dType>::load_weights(std::ifstream &input) {
 	load_weights_GPU(input);
     
     if (this->LSH_type == 1){
-        lsh_wta = new LSH_WTA<dType>(p_params->WTA_K, p_params->WTA_units_per_band, p_params->WTA_W, p_params->WTA_m, p_params->WTA_threshold, p_params->WTA_topn, LSTM_size, output_vocab_size, minibatch_size, d_D, d_b_d,p_params->show_debug_info);
+        lsh_wta = new LSH_WTA<dType>(p_params->WTA_K, p_params->WTA_units_per_band, p_params->WTA_W, p_params->WTA_m, p_params->WTA_threshold, p_params->WTA_topn, LSTM_size, output_vocab_size, minibatch_size, d_D, d_b_d,p_params->show_debug_info, this);
     }
 
 }
@@ -542,7 +542,7 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	matrix_bias_kernel<<< kernel_dim,threads_per_block,0,s_layer_info.s0 >>>(output_vocab_size,d_outputdist,d_b_d,d_outputdist);
 	CUDA_GET_LAST_ERROR();
     } else {
-        devSynchAll();
+        //devSynchAll();
         this->lsh_wta->topm(d_outputdist, d_h_t, minibatch_size);
     }
     
@@ -577,8 +577,8 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	else {
 		//std::cout << "OVERFLOW KERNEL\n";
 
-			outputdist_overflow_prevention_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist, d_outputdist, output_vocab_size);
-			CUDA_GET_LAST_ERROR();
+        outputdist_overflow_prevention_kernel<<<minibatch_size,SOFTMAX_THREADS,0,s_layer_info.s0>>>(d_outputdist, d_outputdist, output_vocab_size);
+        CUDA_GET_LAST_ERROR();
 	}
 	
 	if(train_perplexity) {

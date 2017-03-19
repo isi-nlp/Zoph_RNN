@@ -24,7 +24,8 @@ PATH_TO_CUDNN_INCLUDE=${PATH_TO_CUDNN_INCLUDE:-"/home/nlg-05/zoph/cudnn_v4/inclu
 
 #complie
 #-DCUDNN_STATIC
-nvcc -DCUDNN_STATIC -O3 -g -G -arch=sm_35 \
+#
+nvcc -DCUDNN_STATIC -DTIMER_DEBUG -O3 -arch=sm_35 \
     -Xcompiler -fopenmp \
     -I $PATH_TO_CUDA_INCLUDE \
     -I $PATH_TO_BOOST_INCLUDE  \
@@ -35,7 +36,7 @@ nvcc -DCUDNN_STATIC -O3 -g -G -arch=sm_35 \
 
 nvcc -c src/format.cc -o format.o
 
-nvcc -arch=sm_35 -rdc=true main.o format.o -o ZOPH_RNN\
+nvcc -arch=sm_35 -rdc=true -O3 main.o format.o -o ZOPH_RNN\
     ${PATH_TO_BOOST_LIB}libboost_system.a \
     ${PATH_TO_BOOST_LIB}libboost_filesystem.a \
     ${PATH_TO_BOOST_LIB}libboost_program_options.a \
