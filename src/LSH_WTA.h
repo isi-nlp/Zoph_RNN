@@ -96,6 +96,7 @@ public:
     int index_size;
     
     int debug_code;
+    int target_vocab_policy;
     
     cublasHandle_t cublasHandle;
     
@@ -113,8 +114,7 @@ public:
     // cpu version of retrival
     std::vector<std::unordered_map<int, std::vector<int>>> band_maps;
     
-    LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code, softmax_layer<dType> * p_softmax_layer){
-        
+    LSH_WTA(int K, int units_per_band, int W, int m, int WTA_threshold, int WTA_topn, int LSTM_size, int vocab_size, int batch_size, dType * d_D, dType * d_b, int debug_code, int target_vocab_policy, softmax_layer<dType> * p_softmax_layer){
         
         if (debug_code % 2 == 1){
             this->show_debug_info = true;
@@ -137,6 +137,8 @@ public:
         this->debug_code = debug_code;
         
         this->p_softmax_layer = p_softmax_layer;
+        this->target_vocab_policy = target_vocab_policy;
+        
         
         this->m = m;
         this->K = K;
@@ -511,8 +513,11 @@ public:
 
             dense2array<<<grid, threads>>>(d_outputdist, this->vocab_size, this->batch_size, d_rowIdx, this->topn, this->threshold, this->d_nnz); //0.02ms
             
+
             cudaMemcpy(h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost);
             nnz = h_nnz[0];
+            std::cout<<"NNZ: "<< nnz << '\n';
+            cudaMemcpy(h_rowIdx + topn, d_rowIdx + topn, (nnz - topn) * sizeof(int), cudaMemcpyDeviceToHost);
 
 #ifdef TIMER_DEBUG
             cudaDeviceSynchronize();
@@ -521,7 +526,6 @@ public:
 #endif
 
         
-        std::cout<<"NNZ: "<< nnz << '\n';
         
         // fill_new_db
 #ifdef TIMER_DEBUG
@@ -543,14 +547,25 @@ public:
         if ((debug_code >> 8) % 2 == 0) {
             p_softmax_layer->model->timer.start("gemm");
 #endif
-        float alpha = 1.f, beta = 0.f;
-        cublasSgemm(cublasHandle,
-                    CUBLAS_OP_T, CUBLAS_OP_N,
-                    nnz, this->batch_size, this->d, &alpha,
+            float alpha = 1.f, beta = 0.f;
+            if (this->target_vocab_policy != 3){
+                cublasSgemm(cublasHandle,
+                            CUBLAS_OP_T, CUBLAS_OP_N,
+                            nnz, this->batch_size, this->d, &alpha,
                     d_Db_shrink, this->d,
                     d_h_t_pad, this->d,
                     &beta,
                     d_outputdist_shrink, nnz); //1.2 ms
+            } else { // == 3
+                cublasSgemm(cublasHandle,
+                            CUBLAS_OP_T, CUBLAS_OP_N,
+                            nnz, this->batch_size, this->d, &alpha,
+                            d_Db_shrink, this->d,
+                            d_h_t_pad, this->d,
+                            &beta,
+                            d_outputdist, nnz); //1.2 ms
+                
+            }
 #ifdef TIMER_DEBUG
             cudaDeviceSynchronize();
             p_softmax_layer->model->timer.end("gemm");
@@ -559,11 +574,13 @@ public:
 
         
 #ifdef TIMER_DEBUG
-        if ((debug_code >> 9) % 2 == 0) {
+        if ((debug_code >> 9) % 2 == 0 ) {
             p_softmax_layer->model->timer.start("array2dense");
 #endif
-            fill_number<<<dim3((this->vocab_size+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,this->vocab_size,this->batch_size,(float)-1000.0);
-            array2dense<<<dim3((nnz+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,d_outputdist_shrink,d_rowIdx,this->vocab_size,nnz);
+            if (this->target_vocab_policy != 3){
+                fill_number<<<dim3((this->vocab_size+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,this->vocab_size,this->batch_size,(float)-1000.0);
+                array2dense<<<dim3((nnz+1024-1)/1024,this->batch_size), 1024>>>(d_outputdist,d_outputdist_shrink,d_rowIdx,this->vocab_size,nnz);
+            }
 #ifdef TIMER_DEBUG
             cudaDeviceSynchronize();
             p_softmax_layer->model->timer.end("array2dense");
@@ -576,7 +593,7 @@ public:
         
         if (calltime == 2 && dump_file) {
             cudaDeviceSynchronize();
-
+            
             std::ofstream o_outputdist("d_outputdist_output.txt");
             write_matrix_GPU(d_outputdist,vocab_size,batch_size,o_outputdist);
             o_outputdist.close();
@@ -588,7 +605,11 @@ public:
             std::cout<<"d_h_t_pad_codes\n";
             print_matrix_gpu(d_h_t_pad_codes, this->W, batch_size);
             std::cout<<"d_outputdist\n";
-            print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
+            if (this->target_vocab_policy == 3){
+                print_matrix_gpu(d_outputdist, nnz, batch_size);
+            } else {
+                print_matrix_gpu(d_outputdist, this->vocab_size, batch_size);
+            }
         }
 #endif
     }

@@ -51,6 +51,7 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
     extract_charCNN(word_to_char_map,"char_word_mapping.txt.brz");
 
 		main_integerized_file = params.char_params.word_test_file;
+        
 	}
 
 	//now initialize the file input
@@ -91,6 +92,8 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
     h_new_vocab_index = (int *)malloc(target_vocab_size*sizeof(int));
     CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_new_vocab_index,target_vocab_size*sizeof(int)),"d_new_vocab_index,GPU memory allocation failed\n");
 
+    this->target_vocab_policy = p_params->target_vocab_policy;
+    
     if (p_params->target_vocab_policy == 2)
     {
         this->cap = p_params->target_vocab_cap;
@@ -398,12 +401,30 @@ void decoder_model_wrapper<dType>::forward_prop_target(int curr_index,int *h_cur
 	CUDA_GET_LAST_ERROR("ERROR ABOVE!!");
 	CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),target_vocab_size*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
 	//copy the outputdist to eigen from CPU
-	copy_dist_to_eigen(h_outputdist,outputdist);
+    
+    if (this->target_vocab_policy == 3) { // LSH_WTA
+        this->nnz = this->model->softmax->get_nnz();
+        copy_dist_to_eigen(h_outputdist,outputdist, this->nnz);
+    }
+    else {
+        copy_dist_to_eigen(h_outputdist,outputdist);
+    }
 
 	if (BZ_CUDA::unk_replacement) {
 		viterbi_alignments_ind = BZ_CUDA::viterbi_alignments;
 		viterbi_alignments_scores = BZ_CUDA::alignment_scores;
 	}
+}
+
+template<typename dType>
+template<typename Derived>
+void decoder_model_wrapper<dType>::copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz) {
+    UNCONST(Derived,outputdist_const,outputdist);
+    for(int i=0; i < nnz; i++) {
+        for(int j=0; j < outputdist.cols(); j++) {
+            outputdist(i,j) = h_outputdist[IDX2C(i,j,nnz)];
+        }
+    }
 }
 
 

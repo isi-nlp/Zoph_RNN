@@ -10,6 +10,7 @@
 #include "format.h"
 #include "memory_util.h"
 #include "custom_kernels.h"
+#include "BZ_CUDA_UTIL.h"
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <thrust/system/cuda/execution_policy.h>
@@ -255,6 +256,9 @@ struct decoder {
     // for vocab_shrink_2
     int *h_current_indices_original;
     int target_vocab_policy = 0;
+    // for LSH_WTA
+    int nnz = 0;
+    int *h_rowIdx;
 
     dType *h_outputdist; // [vocab_size, beam_size] point to models[0].h_outputdist;
     dType *d_outputdist; // need to allocate;
@@ -697,7 +701,7 @@ struct decoder {
     }
 
     template<typename Derived>
-    void print_matrix(Derived *mat, int size,std::string name){
+    void print_matrix_msg(Derived *mat, int size,std::string name){
         std::cout<<name<<"\n";
         for (int i = 0; i< size; i++){
             std:: cout << mat[i] << " ";
@@ -1080,10 +1084,10 @@ struct decoder {
         
         ///timer.start("for_loop_1_new");
         if (false && total_valid_size < 10000){
-            print_matrix(h_valid_vocab_sizes, beam_size + 1, "h_valid_vocab_sizes");
-            print_matrix(h_beams, total_valid_size, "h_beams");
-            print_matrix(h_pointers, total_valid_size, "h_pointers");
-            print_matrix(h_outputdist_topk, total_valid_size, "h_outputdist_topk");
+            print_matrix_msg(h_valid_vocab_sizes, beam_size + 1, "h_valid_vocab_sizes");
+            print_matrix_msg(h_beams, total_valid_size, "h_beams");
+            print_matrix_msg(h_pointers, total_valid_size, "h_pointers");
+            print_matrix_msg(h_outputdist_topk, total_valid_size, "h_outputdist_topk");
         }
         
         int pq_size_limit = beam_size * cols;
@@ -1151,7 +1155,15 @@ struct decoder {
 	template<typename Derived>
 	void expand_hypothesis_without_fsa(const Eigen::MatrixBase<Derived> &outputDist,int index,std::vector<int> &viterbi_alignments) {
 		
-
+        int n_rows = outputDist.rows();
+        if (this->target_vocab_policy == 3){
+            n_rows = nnz;
+            //std::cout<<"nnz: "<<nnz<<"\n";
+            //std::cout<<"h_rowIdx inside: "<< h_rowIdx << "\n";
+            //print_matrix(h_rowIdx, 1, nnz);
+        }
+    
+        
 		if(viterbi_alignments.size()!=0 && viterbi_alignments.size()!=beam_size) {
 			BZ_CUDA::logger << "VITERBI ALIGNMENT ERROR\n";
 			exit (EXIT_FAILURE);
@@ -1171,6 +1183,7 @@ struct decoder {
 
 		empty_queue_global();
         
+        
 		for(int i=0; i<cols; i++) {
 			empty_queue_pq();
             
@@ -1179,14 +1192,19 @@ struct decoder {
                 break;
             }
             
-			for(int j=0; j<outputDist.rows(); j++) {
+			for(int j=0; j<n_rows; j++) {
+                int _word_index = j;
+                if (this->target_vocab_policy == 3){ // LSH_WTA
+                    _word_index = h_rowIdx[j];
+                }
+
 				if(pq.size() < beam_size + 1) {
-					pq.push( dec_obj<dType>(-outputDist(j,i),j,viterbi_alignments[i]) );
+					pq.push( dec_obj<dType>(-outputDist(j,i),_word_index,viterbi_alignments[i]) );
 				}
 				else {
 					if(-outputDist(j,i) < pq.top().val) {
                         pq.pop();
-						pq.push( dec_obj<dType>(-outputDist(j,i),j,viterbi_alignments[i]) );
+						pq.push( dec_obj<dType>(-outputDist(j,i),_word_index,viterbi_alignments[i]) );
 					}
 				}
 			}

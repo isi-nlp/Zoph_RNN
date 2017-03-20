@@ -49,6 +49,8 @@ ensemble_factory<dType>::ensemble_factory(std::vector<std::string> weight_file_n
 	//resise the outputdist that gets sent to the decoder
 	outputdist.resize(target_vocab_size,beam_size);
 	normalization.resize(1,beam_size);
+    
+    
 }
 
 template<typename dType>
@@ -538,6 +540,12 @@ void ensemble_factory<dType>::decode_file_batch() {
             
             
 			//run decoder for this iteration
+            if (p_params->target_vocab_policy == 3){
+                model_decoder->nnz = models[0].nnz; // for LSH_WTA
+                int *temp = models[0].model->softmax->get_h_rowIdx();
+                //std::cout << "temp: "<< temp;
+                model_decoder->h_rowIdx = temp;
+            }
 			model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
 
             models[0].model->timer.end("expand");
@@ -565,7 +573,7 @@ void ensemble_factory<dType>::decode_file_batch() {
 		//output the final results of the decoder
 		ensembles_models();
 		model_decoder->finish_current_hypotheses(outputdist,BZ_CUDA::viterbi_alignments);
-		model_decoder->output_k_best_hypotheses(source_length, models[0].h_new_vocab_index, (p_params->target_vocab_policy > 0));
+		model_decoder->output_k_best_hypotheses(source_length, models[0].h_new_vocab_index, (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2));
 		//model_decoder->print_current_hypotheses();
         
         // after target_vocab_shrink

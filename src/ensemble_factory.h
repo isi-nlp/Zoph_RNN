@@ -31,7 +31,6 @@ public:
 
     global_params* p_params;
 
-
 	ensemble_factory(std::vector<std::string> weight_file_names,int num_hypotheses,int beam_size, dType min_decoding_ratio,\
 		dType penalty, int longest_sent,bool print_score,std::string decoder_output_file,
 		std::vector<int> gpu_nums,dType max_decoding_ratio, int target_vocab_size,global_params &params);

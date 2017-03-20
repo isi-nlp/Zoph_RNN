@@ -57,6 +57,10 @@ public:
 	virtual void get_distribution_GPU_decoder_wrapper() = 0;
 
 	virtual dType *get_dist_ptr() = 0;
+    
+    virtual int get_nnz() = 0 ;
+    
+    virtual int* get_h_rowIdx() = 0;
 };
 
 

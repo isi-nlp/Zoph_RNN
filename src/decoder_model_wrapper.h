@@ -70,6 +70,11 @@ public:
     int *d_alignments;
     int cap = 0;
     
+    // for LSH
+    int nnz = 0;
+    int target_vocab_policy = 0;
+
+    
     global_params * p_params;
     
     
@@ -95,6 +100,10 @@ public:
 	template<typename Derived>
 	void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
 
+    template<typename Derived>
+    void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz);
+
+    
 	void target_copy_prev_states();
 };
 

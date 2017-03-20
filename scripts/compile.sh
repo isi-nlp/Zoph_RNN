@@ -24,8 +24,8 @@ PATH_TO_CUDNN_INCLUDE=${PATH_TO_CUDNN_INCLUDE:-"/home/nlg-05/zoph/cudnn_v4/inclu
 
 #complie
 #-DCUDNN_STATIC
-#
-nvcc -DCUDNN_STATIC -DTIMER_DEBUG -O3 -arch=sm_35 \
+#-DTIMER_DEBUG
+nvcc -DCUDNN_STATIC  -O3 -arch=sm_35 \
     -Xcompiler -fopenmp \
     -I $PATH_TO_CUDA_INCLUDE \
     -I $PATH_TO_BOOST_INCLUDE  \

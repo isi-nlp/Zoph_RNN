@@ -128,8 +128,8 @@ public:
     // for LSH
     int LSH_type = 0;
     LSH_WTA<dType> *lsh_wta;
-    global_params * p_params; 
-    
+    global_params * p_params;
+    int nnz = 0;
 
     
 	softmax_layer() {};
@@ -215,6 +215,11 @@ public:
 	cudaEvent_t get_ERR_ht_event();
 
 	dType *get_dist_ptr();
+    
+    int get_nnz();
+    
+    int *get_h_rowIdx();
+
 };
 
 #endif
