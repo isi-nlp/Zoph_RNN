@@ -153,7 +153,7 @@ public:
         this->batch_size = batch_size;
         this->threshold = WTA_threshold;
         this->topn = WTA_topn;
-        this->index_size = this->vocab_size * 2;
+        this->index_size = this->vocab_size * 5 / 4;
         
         zero_to_d = boost::uniform_int<>(0,d-1);
         dice = new boost::variate_generator< boost::random::mt19937 , boost::uniform_int<> >(gen, zero_to_d);
