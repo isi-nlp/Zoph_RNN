@@ -399,15 +399,25 @@ void decoder_model_wrapper<dType>::forward_prop_target(int curr_index,int *h_cur
 	//copy the outputdist to CPU
 	cudaDeviceSynchronize();
 	CUDA_GET_LAST_ERROR("ERROR ABOVE!!");
-	CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),target_vocab_size*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
 	//copy the outputdist to eigen from CPU
     
     if (this->target_vocab_policy == 3) { // LSH_WTA
         this->nnz = this->model->softmax->get_nnz();
+        model->timer.start("copy_h_outputdist");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),this->nnz*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
+        model->timer.end("copy_h_outputdist");
+        model->timer.start("copy_dist_to_eigen");
         copy_dist_to_eigen(h_outputdist,outputdist, this->nnz);
+        model->timer.end("copy_dist_to_eigen");
     }
     else {
+        model->timer.start("copy_h_outputdist");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),outputdist.rows()*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
+        model->timer.end("copy_h_outputdist");
+        model->timer.start("copy_dist_to_eigen");
         copy_dist_to_eigen(h_outputdist,outputdist);
+        model->timer.end("copy_dist_to_eigen");
+
     }
 
 	if (BZ_CUDA::unk_replacement) {

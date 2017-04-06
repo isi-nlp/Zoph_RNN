@@ -14,6 +14,7 @@ public:
 	decoder<dType> *model_decoder; //pass the output dists to this
 
 	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> outputdist;
+    Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> *p_outputdist;
 	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic> normalization;
 
 	int num_lines_in_file; //how many lines in the decoder file

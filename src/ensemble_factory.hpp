@@ -290,7 +290,7 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
         ensembles_models();
         
         //run decoder for this iteration
-        model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
+        model_decoder->expand_hypothesis(*p_outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
         //swap the decoding states
         for(int j=0; j<models.size(); j++) {
             // here the curr_index doesn't matter
@@ -318,7 +318,7 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
     }
     //output the final results of the decoder
     ensembles_models();
-    model_decoder->finish_current_hypotheses(outputdist,BZ_CUDA::viterbi_alignments);
+    model_decoder->finish_current_hypotheses(*p_outputdist,BZ_CUDA::viterbi_alignments);
     model_decoder->output_k_best_hypotheses(models[0].fileh->sentence_length);
     //model_decoder->print_current_hypotheses();
     model_decoder->end_transfer = pre_end_transfer;
@@ -456,7 +456,8 @@ void ensemble_factory<dType>::decode_file_batch() {
         
         models[0].model->timer.start("total");
         
-        
+        models[0].model->timer.start("memcpy_vocab_indicies");
+
 		BZ_CUDA::logger << "Decoding sentence: " << i << " out of " << num_lines_in_file << "\n";
 		//fileh->read_sentence(); //read sentence from file
 
@@ -467,6 +468,8 @@ void ensemble_factory<dType>::decode_file_batch() {
 		}
 
 		devSynchAll();
+
+        models[0].model->timer.end("memcpy_vocab_indicies");
 
 		//init decoder
 		model_decoder->init_decoder();
@@ -531,10 +534,11 @@ void ensemble_factory<dType>::decode_file_batch() {
 
 			//now ensemble the models together
 			//this also does voting for unk-replacement
-		//	BZ_CUDA::logger << "Source length: " << source_length << "\n";
+            //	BZ_CUDA::logger << "Source length: " << source_length << "\n";
             
-            
+            models[0].model->timer.start("ensembles_models");
 			ensembles_models();
+            models[0].model->timer.end("ensembles_models");
 
             models[0].model->timer.start("expand");
             
@@ -546,15 +550,20 @@ void ensemble_factory<dType>::decode_file_batch() {
                 //std::cout << "temp: "<< temp;
                 model_decoder->h_rowIdx = temp;
             }
-			model_decoder->expand_hypothesis(outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
+			
+            model_decoder->expand_hypothesis(*p_outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
 
             models[0].model->timer.end("expand");
             
+            models[0].model->timer.start("swap_decoding_states");
+
 			//swap the decoding states
 			for(int j=0; j<models.size(); j++) {
 				models[j].swap_decoding_states(model_decoder->new_indicies_changes,curr_index);
 				models[j].target_copy_prev_states();
 			}
+
+            models[0].model->timer.end("swap_decoding_states");
 
 			//for the scores of the last hypothesis
 			last_index = curr_index;
@@ -566,21 +575,56 @@ void ensemble_factory<dType>::decode_file_batch() {
             
 		}
 
+        models[0].model->timer.start("forward_target");
+
 		//now run one last iteration
-		for(int j=0; j < models.size(); j++) {
-			models[j].forward_prop_target(last_index+1,model_decoder->h_current_indices);
-		}
+        if (p_params->target_vocab_policy == 2){
+            // mapping current indicies
+            for (int i = 0; i<models[0].beam_size; i++){
+                int mapped_index = model_decoder->h_current_indices[i];
+                model_decoder->h_current_indices_original[i] = models[0].h_new_vocab_index[mapped_index];
+            }
+            for(int j=0; j < models.size(); j++) {
+                // do current d
+                models[j].forward_prop_target(last_index+1,model_decoder->h_current_indices_original);
+                //now take the viterbi alignments
+            }
+            
+        } else {
+
+            for(int j=0; j < models.size(); j++) {
+            
+                models[j].forward_prop_target(last_index+1,model_decoder->h_current_indices);
+            }
+        }
+        
+        models[0].model->timer.end("forward_target");
+
+        
 		//output the final results of the decoder
+        models[0].model->timer.start("forward_target");
 		ensembles_models();
-		model_decoder->finish_current_hypotheses(outputdist,BZ_CUDA::viterbi_alignments);
+        models[0].model->timer.end("forward_target");
+
+
+        models[0].model->timer.start("output_k_best");
+
+		model_decoder->finish_current_hypotheses(*p_outputdist,BZ_CUDA::viterbi_alignments);
 		model_decoder->output_k_best_hypotheses(source_length, models[0].h_new_vocab_index, (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2));
-		//model_decoder->print_current_hypotheses();
+        
+        models[0].model->timer.end("output_k_best");
+		
+        //model_decoder->print_current_hypotheses();
         
         // after target_vocab_shrink
+        models[0].model->timer.start("shrink_target_vocab");
+
         for(int j=0; j < models.size(); j++) {
             models[j].after_target_vocab_shrink();
         }
+        models[0].model->timer.end("shrink_target_vocab");
 
+        
         models[0].model->timer.end("total");
 
 	}
@@ -595,7 +639,8 @@ void ensemble_factory<dType>::ensembles_models() {
 	int num_models = models.size();
     
     if (num_models == 1){
-        outputdist = models[0].outputdist;
+        //outputdist = models[0].outputdist;
+        p_outputdist = &models[0].outputdist;
     } else {
         for(int i=0; i<outputdist.rows(); i++) {
             for(int j=0; j< outputdist.cols(); j++) {
@@ -615,6 +660,8 @@ void ensemble_factory<dType>::ensembles_models() {
         for(int i=0; i<outputdist.rows(); i++) {
             outputdist.row(i) = (outputdist.row(i).array()/normalization.array()).matrix();
         }
+        
+        p_outputdist = & outputdist;
     }
 
 	//now averaging alignment scores for unk replacement
