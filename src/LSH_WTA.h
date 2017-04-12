@@ -829,9 +829,17 @@ public:
             if (this->W < div){
                 block_dim = dim3(n_vectors,1);
             } else {
+                if (n_vectors * div < 1024){
                 // assume W is the multiples of 50
-                n_block = this->W / div;
-                block_dim = dim3(n_vectors, div);
+                    n_block = this->W / div;
+                    block_dim = dim3(n_vectors, div);
+                }
+                else {
+                    // assume W is the muliples of 20; largest beam support 50;
+                    div = 20;
+                    n_block = this->W / div;
+                    block_dim = dim3(n_vectors, div);
+                }
             }
         }
         

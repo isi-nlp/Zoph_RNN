@@ -528,6 +528,11 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
     dType alpha = 1;
     dType beta = 0;
     
+
+#ifdef TIMER_DEBUG
+    this->model->timer.start("softmax_gemm");
+#endif
+
     if (this->LSH_type == 0){
 	//multiply the D matrix with the hidden state matrix
 	cublasSetStream(s_layer_info.handle,s_layer_info.s0);
@@ -550,6 +555,11 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
         //print_matrix(this->lsh_wta->h_rowIdx, 1, this->nnz);
     }
     
+#ifdef TIMER_DEBUG
+    cudaDeviceSynchronize();
+    this->model->timer.end("softmax_gemm");
+#endif
+    
 	//this is for decoding
 	if(BZ_CUDA::pre_norm) {
 		devSynchAll();
@@ -561,6 +571,11 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 		return;
 	}
 
+#ifdef TIMER_DEBUG
+    this->model->timer.start("softmax_softmax");
+#endif
+
+    
 	if(!scaled) {
 		cudaDeviceSynchronize();
 		//exp every element in the outputDist matrix
@@ -606,7 +621,12 @@ void softmax_layer<dType>::get_distribution_GPU(int output_vocab_size,dType *d_o
 	#ifdef REMOVE_STREAMS
 	devSynchAll();
 	#endif
-
+    
+#ifdef TIMER_DEBUG
+    cudaDeviceSynchronize();
+    this->model->timer.end("softmax_softmax");
+#endif
+    
 	cudaEventRecord(s_layer_info.outputdist_done,s_layer_info.s0);
     
 }
