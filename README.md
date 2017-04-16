@@ -13,7 +13,7 @@ This toolkit can successfully replicate the results from the following papers (t
 6. [Sequence to Sequence Learning with Neural Networks](http://arxiv.org/pdf/1409.3215.pdf)
 7. [Recurrent Neural Network Regularization](http://arxiv.org/pdf/1409.2329.pdf)
 
-#Instructions for compilation/using the code
+# Instructions for compilation/using the code
 The code for Zoph\_RNN is provided in the `src/` directory. Additionally, a precompiled binary (named `ZOPH_RNN`) is provided that will work on 64 bit linux for cuda 7.5, so it is not necessary to compile the code. 
 
 If you just want to use the executable, then run the following command `cat executable/ZOPH_RNN_1 executable/ZOPH_RNN_2 executable/ZOPH_RNN_3 executable/ZOPH_RNN_4 > ZOPH_RNN`. Then `ZOPH_RNN` will be the executable that you can use.  To run the executable you need to be sure your path variable includes the location to CUDA. This is a sample command of putting cuda into your PATH variable `export PATH=/usr/cuda/7.5/bin:$PATH`
@@ -28,7 +28,7 @@ If you want to compile the Zoph\_RNN code run `bash scripts/compile.sh`, which w
 6. `PATH_TO_EIGEN` (example value: `/usr/eigen/` )
 7. `PATH_TO_CUDNN_INCLUDE` (example value: `/usr/cudnn_v4/include/` ) 
 
-###The acceptable versions for the libraries above
+### The acceptable versions for the libraries above
 
 Note that cuda version greater than 7.0 is required to run the code, while the rest are required to compile the code
 
@@ -39,7 +39,7 @@ Note that cuda version greater than 7.0 is required to run the code, while the r
 * Any version of Eigen
 
 
-#Tutorial
+# Tutorial
 For this tutorial `ZOPH_RNN` represents the executable to run the code. Also all the scripts in the `scripts` folder require python 3 to run.
 
 This command will bring up the program's help menu showing all the flags that the program can be run with:
@@ -58,7 +58,7 @@ The commands for these two different architectures are almost the same, all that
 In the `sample_data` directory there is sample data provided that shows the proper formatting for files.
 
 
-###Training a seq-to-seq model:
+### Training a seq-to-seq model:
 Lets step through an example that trains a basic sequence-to-sequence model. The following code will train a sequence-to-sequence model with the source training data `/path/to/source_train_data.txt` and the target training data `/path/to/target_train_data.txt`. These are placeholder names that will be replaced with your data files when you are training your own model. The resulting model will be saved to `model.nn`, but this can be named whatever the user wants. Training data always needs to consist of one training example per line, with tokens separated by spaces.
 
 ```
@@ -128,7 +128,7 @@ One feature of this code is that is supports model parallelism across multiple g
 ```
 
 
-###Supplying your own vocabulary mapping file
+### Supplying your own vocabulary mapping file
 The `--source-vocab-size N` and the `--target-vocab-size N` flags create a vocabulary mapping file that will replace all words not in the top N most frequent words with <unks>'s. The code will create an integer mapping that is stored in the top of the model file. If you want to supply your own mapping file you can do this using the  `--vocab-mapping-file /path/to/my_mapping.nn`. The `my_mapping.nn` can be a previously trained model, in that case it will use the exact same vocabulary mapping as that model. This is useful because if you want to ensemble models using the `--decode` flag, then the models must have exactly the same target vocabulary mapping file for it to work. In the `scripts/` directory there is a python script called `create_vocab_mapping_file.py`. We can use this to create a mapping file, which then gets fed into the training using the following command:
 
 ```
@@ -150,7 +150,7 @@ Instead of using the `create_vocab_mapping_file.py` script, we can also use an e
 This `--vocab-mapping-file` flag only needs to be specified during training. This can also be used for sequence models in the same way.
 
 
-###Force-Decoding a seq-to-seq model
+### Force-Decoding a seq-to-seq model
 Once the model finished training we can use the model file (model.nn, best.nn or any of the models output from `--save-all-best` in the previous training example) for getting the perplexity for a set of source/target pairs or do beam decoding to get the best target outputs given some source sentences. Lets do the former first. We will specify the source and target data we want to get the perplexity for along with the per line log probabilities of each sentece. The output file we specify (`/path/to/output/perp_output.txt`) will contain the per line log probabilities and the total perplexity will be output to standard out. Additionally, we can use the `--logfile` flag as before if we also want standard out to be put to a file too and the `-L` flag to change what the longest sentence the code will accept.
 
 ```
@@ -160,7 +160,7 @@ Once the model finished training we can use the model file (model.nn, best.nn or
 If we trained the model using NCE then we can use the `--NCE-score` flag, which will make the model get the per line log probabilities using an unnormalized softmax. This greatly speeds up force-decode as now a normalization over the softmax does not have to be done, but now it does not represent a distribution that sums to 1. The reason we can do this is because the NCE training objective makes the normalization constant close to 1, so we can get a reasonably good approximation.
 
 
-###Kbest Decoding for a seq-to-seq model
+### Kbest Decoding for a seq-to-seq model
 Lets have the model output the most likely target translation given the source using beam decoding. This can be done with the `--decode` (`-k`) flag. The `model.nn` file will be the trained neural network, `kbest.txt` is where we want the output to be put to and and `source_data.txt` is the file containing the source sentences that we want to be decoded. Once again short sentences are thrown out, so we can change that using the `-L` flag. 
 
 ```
@@ -186,7 +186,7 @@ Another default during decoding is that the output sentences can only be within 
 ```
 
 
-###Ensemble decoding for a seq-to-seq model
+### Ensemble decoding for a seq-to-seq model
 In the above example we only decoded a single model. In this code you have the option of ensembling multiple outputs using the `--decode` flag. All of the models you want to ensemble must have the same target vocabulary mappings, so you must use the `--vocab-mapping-file` flag as specified above. We can ensemble together 8 models below, but any number of models can be specified by the user. 
 
 ```
@@ -195,7 +195,7 @@ In the above example we only decoded a single model. In this code you have the o
 
 Note that now we pass in 8 different model files and 8 different source data files. The reason for the 8 different source files is that the source vocabularies could be different for all 8 models, so different types of data can be passed in. If you want the same data passed in for all 8 model, then simply copy `/path/to/source_data.txt` 8 times as the input to `--decode-main-data-files`.
 
-###Training a seq model
+### Training a seq model
 Training a sequence model is much like training a sequence-to-sequence model. Now we must employ the `-s` flag to denote that we want to train a sequence model. Lets train a model with slighly different parameters from the sequence-to-sequence model above. This model will have a hiddenstate size of 1000, minibatch size of 32, 2 layers, dropout rate of 0.3 and a target vocabulary size of 15K. Also note that now we only need to pass in one data file for training and for dev since it is only a sequence model and not a sequence-to-sequence model.
 
 ```
@@ -203,18 +203,18 @@ Training a sequence model is much like training a sequence-to-sequence model. No
 ```
 
 
-###Force-Decoding a seq model
+### Force-Decoding a seq model
 To force decode the model it is almost the same as force-decoding a sequence-to-sequence model. In the seq model you can also use the `-m` flag to speedup the batching process, but it will no longer output the per line log probability if `-m` is not set to 1.
 
 ```
 ./ZOPH_RNN -s -f /path/to/dev_data.txt model.nn /path/to/output/perp_output.txt -L 500 --logfile /path/to/log/logfile.txt
 ```
 
-###Decoding a seq model
+### Decoding a seq model
 This is not a feature in the code.
 
 
-###Training Multi-Source model
+### Training Multi-Source model
 Lets train a multi-source model like in [Multi-Source Neural Translation](http://www.isi.edu/natural-language/mt/multi-source-neural.pdf). In this model we will have two source encoders and one target encoder. This means we need to have 3-way parallel data. The two source training files in this example are: `source1_train_data.txt` and `source2_train_data`.txt. The target training file is: `target_train_data.txt`. All 3 of these files must have the same number of lines. Notice that we must now add the `--multi-source` flag which specifies the second source training file. Additionally, we must specify it a second neural network file name that will be created just like `model.nn`.
 
 ```
@@ -239,14 +239,14 @@ Now lets have the model use a dev set for learning rate monitoring like before.
 ./ZOPH_RNN -t /path/to/source1_train_data.txt /path/to/target_train_data.txt model.nn --multi-source /path/to/source2_train_data.txt src.nn --lstm-combine 1 --attention-model 1 --feed-input 1 --multi-attention 1 -a /path/to/source1_dev_data.txt /path/to/target_dev_data.txt /path/to/source2_dev_data.txt  -A 0.5 
 ```
  
-###Force-Decoding a Multi-Source model
+### Force-Decoding a Multi-Source model
 To force-decode a multi-source model the `--multi-source` flag must be specified when using the -f flag.
 
 ```
 ./ZOPH_RNN -f /path/to/source1_perp_data.txt /path/to/target_perp_data.txt model.nn /path/to/output/perp_output.txt --logfile /path/to/log/logfile.txt -L 500 --multi-source /path/to/source2_perp_data.txt src.nn
 ```
 
-###Kbest Decoding a Multi-Source model
+### Kbest Decoding a Multi-Source model
 To decode a multi-source model two additional flags needs to be specified.
 
 ```
@@ -254,7 +254,7 @@ To decode a multi-source model two additional flags needs to be specified.
 ```
 
 
-###Training a Preinit Model
+### Training a Preinit Model
 Lets train a model using tranfer learning as specified in [Transfer Learning for Low-Resource Neural Machine Translation](http://arxiv.org/pdf/1604.02201v1.pdf). First we need to have parent data (source and target) and child data (source and target) where the parent and child models must have the same target language. In the paper the shared target language was English. 
 
 Also note that this can only be done with seq-to-seq models and not seq models or multi-source models.
@@ -284,7 +284,7 @@ python scripts/pretrain.py --parent parent_model.nn --trainsource /path/to/sourc
 ```
 
 
-###Unk Replacement in seq-to-seq model
+### Unk Replacement in seq-to-seq model
 To do Unk replacement as specified in [Addressing the Rare Word Problem in Neural Machine Translation](http://stanford.edu/~lmthang/data/papers/acl15_nmt.pdf) there is a python script provided in the `scripts/` directory. The following commands need to be run if you want to do unk replacement. This can only be done with attention seq-to-seq models.
 
 1. When decoding (-k or --decode flags) add in the following flag `--UNK-decode /path/to/unks.txt`.
@@ -326,7 +326,7 @@ python scripts/att_unk_rep.py /path/to/source_data.txt kbest.txt.formatted stage
 
 Now the `kbest.txt.formatted.unkrep` will contain the decoded sentences with the rare words replaced. The format is 1 output per line.
 
-###Models from papers:
+### Models from papers:
 Here are sample commands that can be run to create models in the papers above:
 
 For the paper [Multi-Source Neural Translation](http://www.isi.edu/natural-language/mt/multi-source-neural.pdf). Here is the command to train a multi-source attention model with german and french as the input and english as the output. If you dont want attention remove `--attention-model 1 --feed-input 1 --multi-attention 1` and if you want to use the basic method of combination instead of the child-sum method then change `--lstm-combine 1` to `--lstm-combine 0`.
@@ -370,7 +370,7 @@ For the paper [Sequence to Sequence Learning with Neural Networks](http://arxiv.
 ./ZOPH_RNN -t source_train_data.txt target_train_data.txt model.nn  -H 1000 -N 4 -v 160000 -V 80000 -P -0.08 0.08 -l 0.7 -n 8 --fixed-halve-lr 6 -m 128 -w 5 -L 100 
 ```
 
-#Changes from previous version
+# Changes from previous version
 - The flag (`--HPC-output`) has been renamed to (`--logfile`)
 - The flag (`--source-vocab`) has been renamed to (`--source-vocab-size`)
 - The flag (`--target-vocab`) has been renamed to (`--target-vocab-size`)
@@ -382,5 +382,5 @@ For the paper [Sequence to Sequence Learning with Neural Networks](http://arxiv.
 - Added attention, multi-source, NCE, unk-replacement, transfer learning
 
 
-#License
+# License
 MIT
