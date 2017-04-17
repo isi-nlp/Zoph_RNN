@@ -241,7 +241,7 @@ struct decoder {
     //for repeat_penalty
     bool penalize_repeat = true; // always true, but controlled by the weights;
     precision repeat_penalty = 0.0;
-    float interactive_repeat_penalty;
+    float interactive_repeat_penalty = 0.0;
     precision adjacent_repeat_penalty = 0.0;
     std::vector<std::unordered_map<int,int>> sentence_sets;
     std::vector<std::unordered_map<int,int>> temp_sentence_sets;
@@ -1030,6 +1030,7 @@ struct decoder {
                 h_sentence_set[sentence_set_size * 3] = vocab_index;
                 h_sentence_set[sentence_set_size * 3+1] = i;
                 h_sentence_set[sentence_set_size * 3+2] = occur_times;
+                //std::cout << "vocab beam_index occur_time : " <<  vocab_index << " " << i <<" " << occur_times << "\n";
                 sentence_set_size += 1;
             }
         }
@@ -1042,6 +1043,8 @@ struct decoder {
                                "expand_pq 1 h_sentence_set to d_sentence_set\n");
             
             // add_feature_repeat;
+            //std::cout << "repeat_penalty: " <<repeat_penalty << " " << interactive_repeat_penalty << "\n";
+            
             add_feature_repeat<<<std::min(256,(sentence_set_size + 256 - 1)/256),256>>>(d_outputdist, d_sentence_set, repeat_penalty + interactive_repeat_penalty, sentence_set_size, vocab_size);
         }
         
