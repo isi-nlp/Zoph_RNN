@@ -8,6 +8,7 @@
 #include "softmax_node.h"
 #include "transfer_layer.h"
 #include "base_loss.h"
+#include "LSH_WTA.h"
 
 template<typename dType>
 class softmax_layer : public base_loss_layer<dType> {
@@ -41,7 +42,7 @@ public:
 	thrust::device_vector<dType> thrust_d_normalization;
 
 	//device pointers
-	dType *d_D;
+	dType *d_D; // declared in base class
 	dType *d_h_t;
 	dType *d_b_d;
 	dType *d_d_ERRt_ht;
@@ -105,7 +106,7 @@ public:
 	bool clip_gradients; //If true then clip gradients
 	dType norm_clip; //For gradient clipping
 	int minibatch_size;
-	int output_vocab_size;
+	int output_vocab_size; //declared in base class;
 	int LSTM_size;
 	dType learning_rate;
 	bool scaled;
@@ -124,6 +125,13 @@ public:
 
 	curandGenerator_t rand_gen;
 
+    // for LSH
+    int LSH_type = 0;
+    LSH_WTA<dType> *lsh_wta;
+    global_params * p_params;
+    int nnz = 0;
+
+    
 	softmax_layer() {};
 
 	void init_loss_layer(struct neuralMT_model<precision> *model,global_params &params); 
@@ -207,6 +215,11 @@ public:
 	cudaEvent_t get_ERR_ht_event();
 
 	dType *get_dist_ptr();
+    
+    int get_nnz();
+    
+    int *get_h_rowIdx();
+
 };
 
 #endif

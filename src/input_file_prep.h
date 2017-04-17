@@ -2968,7 +2968,7 @@ struct input_file_prep {
 	}
 
 	void integerize_file_kbest(std::string output_weights_name,std::string source_file_name,std::string tmp_output_name,
-		int max_sent_cutoff,int &target_vocab_size,bool multi_src_model,std::string multi_src_mapping_file) 
+		int max_sent_cutoff,int &target_vocab_size,bool multi_src_model,std::string multi_src_mapping_file, bool legacy_model = false)
 	{
 		data.clear();
 		int VISUAL_num_source_word_tokens =0;
@@ -3105,6 +3105,9 @@ struct input_file_prep {
 			}
 			data[i].src_sent.clear();
 			data[i].src_sent_int= src_int;
+            if(legacy_model) {
+                data[i].src_sent_int.insert(data[i].src_sent_int.begin(),0);
+            }
 		}
 
 
@@ -3201,6 +3204,53 @@ struct input_file_prep {
 		unint.close();
 	}
 
+    void load_word_index_mapping(std::string output_weights_name,bool LM,bool decoder){
+        std::ifstream weights_file;
+        weights_file.open(output_weights_name.c_str());
+        weights_file.clear();
+        weights_file.seekg(0, std::ios::beg);
+        
+        std::string str;
+        std::string word;
+        
+        std::getline(weights_file, str); //info from first sentence
+        std::getline(weights_file, str); //======== stuff
+        if(!LM) {
+            while(std::getline(weights_file, str)) {
+                int tmp_index;
+                if(str.size()>3 && str[0]=='=' && str[1]=='=' && str[2]=='=') {
+                    break; //done with source mapping
+                }
+                std::istringstream iss(str, std::istringstream::in);
+                iss >> word;
+                tmp_index = std::stoi(word);
+                iss >> word;
+                src_reverse_mapping[tmp_index] = word;
+                src_mapping[word] = tmp_index;
+                
+            }
+        }
+        
+        while(std::getline(weights_file, str)) {
+            int tmp_index;
+            
+            if(str.size()>3 && str[0]=='=' && str[1]=='=' && str[2]=='=') {
+                break; //done with target mapping
+            }
+            std::istringstream iss(str, std::istringstream::in);
+            iss >> word;
+            tmp_index = std::stoi(word);
+            iss >> word;
+            tgt_reverse_mapping[tmp_index] = word;
+            tgt_mapping[word] = tmp_index;
+        }
+        
+        
+        weights_file.close();
+        
+    }
+
+    
 
 	void unint_alignments(std::string output_weights_name,std::string int_alignments_file,std::string final_alignment_file) {
 		std::ifstream weights_file;

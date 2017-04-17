@@ -2573,6 +2573,8 @@ template<typename dType>
 void neuralMT_model<dType>::forward_prop_target(int curr_index,int *d_current_indicies,int *d_ones,int LSTM_size, int beam_size,
 	int *d_char_cnn_indicies) {
 
+    timer.start("forward_prop_target");
+
 	//charcnn prep
 	if(char_cnn) {
 		input_layer_target.prep_char_cnn(d_char_cnn_indicies,1,
@@ -2621,22 +2623,31 @@ void neuralMT_model<dType>::forward_prop_target(int curr_index,int *d_current_in
 	}
 
 	//now run forward prop on all the layers
+    timer.start("first_layer forward");
+
 	input_layer_target.nodes[0].forward_prop();
 	devSynchAll();
+    timer.end("first_layer forward");
+
 
 	// if(curr_index==0) {
 	// 	thrust::device_ptr<dType> thrust_d_h_t = thrust::device_pointer_cast(input_layer_target.nodes[0].d_h_t);
 	// 	std::cout << "Target index: 0 \n";
 	// 	std::cout << "top hidden state: " << thrust_d_h_t[0] << " , " << thrust_d_h_t[input_layer_target.nodes[0].LSTM_size-1] << "\n\n";
 	// }
+    timer.start("rest_layer forward");
 
 	for(int i=0; i<target_hidden_layers.size(); i++) {
 		target_hidden_layers[i].nodes[0].forward_prop();
 	}
 	devSynchAll();
+    timer.end("rest_layer forward");
+
 
 	//now attention stuff
 	if(attent_params.attention_model) {
+        timer.start("target_attention_layer");
+
 		if(num_layers==1) {
 			decoder_att_layer.nodes[0].d_h_t = input_layer_target.nodes[0].d_h_t;
 		}
@@ -2645,6 +2656,7 @@ void neuralMT_model<dType>::forward_prop_target(int curr_index,int *d_current_in
 		}
 		decoder_att_layer.nodes[0].forward_prop();
 		devSynchAll();
+        timer.end("target_attention_layer");
 	}
 
 	if(attent_params.attention_model) {
@@ -2657,8 +2669,11 @@ void neuralMT_model<dType>::forward_prop_target(int curr_index,int *d_current_in
 		softmax->backprop_prep_GPU(target_hidden_layers[target_hidden_layers.size()-1].nodes[0].d_h_t,0);
 	}
 	//softmax->get_distribution_GPU(softmax->output_vocab_size,softmax->d_outputdist,softmax->d_D,softmax->d_b_d,softmax->d_h_t); //non-trunc
+    timer.start("get_distribution");
 	softmax->get_distribution_GPU_decoder_wrapper();
 	devSynchAll();
+    timer.end("get_distribution");
+
 	//copy the h_t and c_t to the previous hidden state of node 0
 	cudaSetDevice(input_layer_target.ih_layer_info.device_number);
 
@@ -2668,6 +2683,7 @@ void neuralMT_model<dType>::forward_prop_target(int curr_index,int *d_current_in
 	// 	CUDA_ERROR_WRAPPER(cudaMemcpy(previous_target_states[j+1].d_h_t_prev,target_hidden_layers[j].nodes[0].d_h_t,LSTM_size*beam_size*sizeof(dType),cudaMemcpyDeviceToDevice),"GPU memcpy failed3\n");
 	// 	CUDA_ERROR_WRAPPER(cudaMemcpy(previous_target_states[j+1].d_c_t_prev,target_hidden_layers[j].nodes[0].d_c_t,LSTM_size*beam_size*sizeof(dType),cudaMemcpyDeviceToDevice),"GPU memcpy failed4\n");
 	// }
+    timer.end("forward_prop_target");
 
 }
 
@@ -2707,6 +2723,56 @@ void neuralMT_model<dType>::swap_decoding_states(const Eigen::MatrixBase<Derived
 	// devSynchAll();
 	// std::cout << " Finished swap decoding states\n";
 	// CUDA_GET_LAST_ERROR("SWAP DECODING STATES");
+}
+
+// for fsaline
+
+
+
+template<typename dType>
+void neuralMT_model<dType>::get_chts(std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>> &chts, int beam_index, int beam_size){
+    // ct[0], ht[0], ct[1], ht[1]
+    // should extract from c_t_prev / h_t_prev;
+
+
+    int LSTM_size = input_layer_target.LSTM_size;
+
+    dType * temp_mat = (dType *)malloc(LSTM_size*beam_size*sizeof(dType));
+    
+    Eigen::Matrix<dType,Eigen::Dynamic, 1> ct0 = readCol_GPU2Eigen(input_layer_target.nodes[0].d_c_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+
+    chts.push_back(ct0);
+
+    
+    Eigen::Matrix<dType,Eigen::Dynamic, 1> ht0 = readCol_GPU2Eigen(input_layer_target.nodes[0].d_h_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+    
+    
+    chts.push_back(ht0);
+
+    for (int i = 0 ; i < target_hidden_layers.size(); i++){
+        Eigen::Matrix<dType,Eigen::Dynamic, 1> ct = readCol_GPU2Eigen(target_hidden_layers[i].nodes[0].d_c_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+        Eigen::Matrix<dType,Eigen::Dynamic, 1> ht = readCol_GPU2Eigen(target_hidden_layers[i].nodes[0].d_h_t_prev, temp_mat, beam_index, LSTM_size, beam_size);
+        chts.push_back(ct);
+        chts.push_back(ht);
+    }
+    
+    free(temp_mat);
+    
+}
+
+template<typename dType>
+void neuralMT_model<dType>::set_chts(const std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>>& chts, int beam_size){
+    // ct[0], ht[0], ct[1], ht[1]
+    // should set to pre_state.pre_chts ? check this;
+    int LSTM_size = input_layer_target.LSTM_size;
+
+    writeColBroadcast_Eigen2GPU(previous_target_states[0].d_c_t_prev, chts[0], LSTM_size, beam_size);
+    writeColBroadcast_Eigen2GPU(previous_target_states[0].d_h_t_prev, chts[1], LSTM_size, beam_size);
+    
+    for (int i = 0 ; i < target_hidden_layers.size(); i++){
+        writeColBroadcast_Eigen2GPU(previous_target_states[i+1].d_c_t_prev, chts[2*i+2], LSTM_size, beam_size);
+        writeColBroadcast_Eigen2GPU(previous_target_states[i+1].d_h_t_prev, chts[2*i+3], LSTM_size, beam_size);
+    }
 }
 
 

@@ -251,6 +251,51 @@ struct global_params {
 	std::string input_weight_file = "model.nn";
 	std::string output_weight_file = "model.nn";
 
+    //For fsa
+    std::string fsa_file = "";
+    float fsa_weight = 0.0;
+    bool print_beam = false;
+    bool fsa_log = true;
+    bool interactive = false;
+    bool interactive_line = false;
+    precision repeat_penalty = 0;
+    precision adjacent_repeat_penalty = 0;
+    float wordlen_weight = 0;
+    float alliteration_weight = 0;
+
+    
+    // for encourage list
+    std::vector<std::string> encourage_list;
+    std::vector<float> encourage_weight;
+    std::string encourage_weight_str = "";
+    
+
+    // for LSH decoding
+    // 0: no LSH; 1 Winner-takes-all 
+    int LSH_type = 0;
+    // for WTA
+    int WTA_K = 8;
+    int WTA_units_per_band = 2; // log2(WTA_K) * WTA_units_per_band <= 32 (unsigned int)
+    int WTA_W = 100; // number of bands;
+    int show_debug_info = 0;
+    int WTA_m = 10;
+    int WTA_threshold = 1;
+    int WTA_topn = 0;
+
+    // for target vocab set shrink
+    // 0 full softmax
+    // 1 top 10k
+    // 2 with alignment
+    int target_vocab_policy = 0;
+    // if 1
+    int top_vocab_size = 10;
+    // if 2
+    std::string alignment_file = "";
+    int target_vocab_cap = 1;
+    // for lagecy-model
+    bool legacy_model = false;
+    
+    
 };
 
 

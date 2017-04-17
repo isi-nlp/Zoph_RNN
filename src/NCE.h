@@ -155,6 +155,11 @@ public:
 	void check_gradient_GPU(dType epsilon,dType *d_mat,dType *d_grad,int rows,int cols);
 
 	void check_gradient_GPU_SPARSE(dType epsilon,dType *d_mat,dType *d_grad,int LSTM_size,int *d_unique_indicies,int curr_num_unique);
+    
+    int get_nnz();
+    
+    int *get_h_rowIdx();
+
 
 };
 

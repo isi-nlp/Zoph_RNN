@@ -3,6 +3,7 @@
 
 #include "file_helper_decoder.h"
 #include "decoder.h"
+#include "memory_util.h"
 
 template<typename dType>
 class ensemble_factory {
@@ -24,12 +25,23 @@ public:
 	//these must be fixed
 	const int start_symbol = 0;
 	const int end_symbol = 1;
+    
+    bool interactive = false;
+    bool interactive_line = false;
+
+    global_params* p_params;
 
 	ensemble_factory(std::vector<std::string> weight_file_names,int num_hypotheses,int beam_size, dType min_decoding_ratio,\
 		dType penalty, int longest_sent,bool print_score,std::string decoder_output_file,
 		std::vector<int> gpu_nums,dType max_decoding_ratio, int target_vocab_size,global_params &params);
 	void init_index_swapping(); //pass in the master for swapping around
 	void decode_file();
+    
+    void decode_file_interactive();
+    void decode_file_interactive_line();
+    void decode_file_line(bool right_after_decoding, bool end_transfer);
+    void decode_file_batch();
+    
 	void ensembles_models();
 	void get_target_vocab(std::string file_name);
 
