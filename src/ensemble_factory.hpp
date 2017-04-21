@@ -82,8 +82,9 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
     while (true) {
         // 1. source <source_file>  -> [END]
         // 2. words <words> -> [END]
-        // 3. fsa <fsa_file> -> [END] : as normal
-        // 4. fsaline <fsa_file> -> [END]: as noraml, but at the end, move corresponding ct and ht to all beams.
+        // 3. fsa <fsa_file> enc1.txt,enc2.txt 1.0,-1.0 -> [END] : as normal
+        // 4. fsaline <fsa_file> enc1.txt,enc2.txt 1.0,-1.0 -> [END]: as noraml, but at the end, move corresponding ct and ht to all beams.
+        
         
         std::cout<<"Please input <source/words/fsa/fsaline> <source_file/words/fsa_file>\n";
         std::cout.flush();
@@ -197,6 +198,23 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             
             model_decoder->init_decoder(models[0].fileh->sentence_length, right_after_encoding);
             
+            //process the encourage list file and encourage weight;
+            std::vector<std::string> encourage_list_files;
+            std::vector<float> encourage_weights;
+
+            if (ll.size() == 4) { // encourage
+                encourage_list_files = split(ll[2],',');
+                
+                std::vector<std::string> weight_strs = split(ll[3],',');
+                for (const std::string weight_str: weight_strs)
+                {
+                    encourage_weights.push_back(std::stof(weight_str));
+                }
+            }
+            model_decoder->init_encourage_lists(encourage_list_files,encourage_weights);
+            
+            
+            
             decode_file_line(right_after_encoding,false);
             
             //read output and print into stdout;
@@ -229,6 +247,22 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             model_decoder->init_fsa_interactive(fsa_file);
             
             model_decoder->init_decoder(models[0].fileh->sentence_length, right_after_encoding);
+            
+            //process the encourage list file and encourage weight;
+            std::vector<std::string> encourage_list_files;
+            std::vector<float> encourage_weights;
+            
+            if (ll.size() == 4) { // encourage
+                encourage_list_files = split(ll[2],',');
+                
+                std::vector<std::string> weight_strs = split(ll[3],',');
+                for (const std::string weight_str: weight_strs)
+                {
+                    encourage_weights.push_back(std::stof(weight_str));
+                }
+            }
+            model_decoder->init_encourage_lists(encourage_list_files,encourage_weights);
+
             
             model_decoder->model = models[0].model;
             decode_file_line(right_after_encoding,true);
