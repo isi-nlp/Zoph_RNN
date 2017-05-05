@@ -4,6 +4,7 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
 	std::string multi_src_integerized_file,int longest_sent,global_params &params) 
 {
 
+    this->p_params = &params;
 	this->gpu_num = gpu_num;
 	this->beam_size = beam_size;
 	this->longest_sent = params.longest_sent;
@@ -47,9 +48,10 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
 		h_new_char_indicies = (int *)malloc( beam_size*longest_word*sizeof(int) );
 		CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_new_char_indicies,beam_size*longest_word*sizeof(int)),"GPU memory allocation failed\n");
 
-		extract_charCNN(word_to_char_map,"char_word_mapping.txt.brz");
+    extract_charCNN(word_to_char_map,"char_word_mapping.txt.brz");
 
 		main_integerized_file = params.char_params.word_test_file;
+        
 	}
 
 	//now initialize the file input
@@ -81,6 +83,47 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
 
 	//load in weights for the model
 	model->load_weights();
+    
+    //for shrink the target set vocab;
+    CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_D_shrink,LSTM_size*target_vocab_size*sizeof(dType)),"d_D_shrink,GPU memory allocation failed\n");
+
+    CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_b_shrink,target_vocab_size*sizeof(dType)),"d_b_shrink,GPU memory allocation failed\n");
+    
+    h_new_vocab_index = (int *)malloc(target_vocab_size*sizeof(int));
+    CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_new_vocab_index,target_vocab_size*sizeof(int)),"d_new_vocab_index,GPU memory allocation failed\n");
+
+    this->target_vocab_policy = p_params->target_vocab_policy;
+    
+    if (p_params->target_vocab_policy == 2)
+    {
+        this->cap = p_params->target_vocab_cap;
+        h_alignments = (int *)malloc(source_vocab_size*(cap+1)*sizeof(int));
+        CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_alignments,source_vocab_size*(cap+1)*sizeof(int)),"d_alignmets,GPU memory allocation failed\n");
+        for (int i = 0; i < source_vocab_size; i +=1){
+            h_alignments[i*(cap+1)] = -1;
+        }
+        std::string line;
+        std::ifstream infile(p_params->alignment_file.c_str());
+        while (std::getline(infile, line)){
+            std::vector<std::string> ll = split(line,' ');
+
+            if (ll.size() > cap+1) {
+                std::cout << "ll size exceed: "<<cap<< " " << ll.size()<<"\n";
+            }
+
+            int source_index = std::stoi(ll[0]);
+            for (int i = 1; i < ll.size(); i ++){
+                int target_index = std::stoi(ll[i]);
+                h_alignments[source_index * (cap+1) + i-1] = target_index;
+            }
+            h_alignments[source_index * (cap+1) + ll.size()-1] = -1;
+        }
+        
+        //CUDA_ERROR_WRAPPER(cudaMemcpy(d_alignments,h_alignments,source_vocab_size*(cap+1)*sizeof(int),cudaMemcpyHostToDevice),"h_alignemnts to d_alignments");
+        
+        
+    }
+    
 }
 
 
@@ -194,12 +237,138 @@ void decoder_model_wrapper<dType>::memcpy_vocab_indicies() {
 }	
 
 
+template<typename dType>
+void decoder_model_wrapper<dType>::prepare_target_vocab_set(){
+    
+    // only works for softmax, not sure about NCE class; 
+    
+    if (p_params->target_vocab_policy == 1){ // top 10k
+        if (! policy_1_done){
+            policy_1_done = true;
+            
+            softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
+            
+            int topn = p_params->top_vocab_size;
+            this->new_output_vocab_size = topn;
+            for (int i = 0; i < topn; i ++){
+                h_new_vocab_index[i] = i;
+            }
+            CUDA_ERROR_WRAPPER(cudaMemcpy(d_new_vocab_index,h_new_vocab_index,topn*sizeof(int),cudaMemcpyHostToDevice),"h_new_vocab_index to d_new_vocab_index");
+            
+            shrink_vocab<<<topn, 256>>>(d_D_shrink, softmax->d_D, d_b_shrink, softmax->d_b_d,d_new_vocab_index, topn, target_vocab_size, LSTM_size);
+            CUDA_GET_LAST_ERROR("shrink_vocab_index");
+            
+            outputdist.resize(topn,beam_size);
+            
+            if (show_shrink_debug){
+                std::cout << "d_new_vocab_idnex : \n";
+                print_matrix_gpu(d_new_vocab_index,1, topn);
+                
+                std::cout << "d_D : \n";
+                print_matrix_gpu(softmax->d_D, target_vocab_size, LSTM_size);
+                
+                std::cout << "d_b : \n";
+                print_matrix_gpu(softmax->d_b_d,1, target_vocab_size);
+                
+                std::cout << "d_D_shrink : \n";
+                print_matrix_gpu(d_D_shrink, topn, LSTM_size);
+                
+                std::cout << "d_b_shrink : \n";
+                print_matrix_gpu(d_b_shrink, 1, topn);
+                
+            }
+        }
+        
+    } else if (p_params->target_vocab_policy == 2){ // alignment
+        std::unordered_set<int> target_vocabs;
+        std::unordered_set<int> source_vocabs;
+        
+        // for <START> <EOF> <UNK>
+        h_new_vocab_index[0] = 0;
+        h_new_vocab_index[1] = 1;
+        h_new_vocab_index[2] = 2;
+        int k = 3;
+        
+        
+        for (int i = 0 ; i < fileh->sentence_length; i ++){
+            int word_index = fileh->h_input_vocab_indicies_source[i];
+            int j = 0;
+            //std::cout<<"source_index "<<word_index<<"\n";
+            if (source_vocabs.count(word_index) > 0){
+                continue;
+            }
+            source_vocabs.insert(word_index);
+            while (true){
+                int target_index = h_alignments[word_index*(cap+1) + j];
+                if (target_index == -1) {
+                    break;
+                }
+                if (target_vocabs.count(target_index) == 0){
+                    h_new_vocab_index[k] = target_index;
+                    target_vocabs.insert(target_index);
+                    //std::cout <<"("<<k<<"," <<target_index << ") ";
+                    k+=1;
+                }
+                j+=1;
+            }
+            //std::cout<< "\n";
+        }
+        this->new_output_vocab_size = k;
+        std::cout<<"new_output_vocab_size: "<< new_output_vocab_size << "\n";
+        
+        softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
+        
+        CUDA_ERROR_WRAPPER(cudaMemcpy(d_new_vocab_index,h_new_vocab_index,this->new_output_vocab_size*sizeof(int),cudaMemcpyHostToDevice),"h_new_vocab_index to d_new_vocab_index");
+        
+        shrink_vocab<<<this->new_output_vocab_size, 256>>>(d_D_shrink, softmax->d_D, d_b_shrink, softmax->d_b_d,d_new_vocab_index, this->new_output_vocab_size, target_vocab_size, LSTM_size);
+        CUDA_GET_LAST_ERROR("shrink_vocab_index");
+        
+        outputdist.resize(this->new_output_vocab_size,beam_size);
+    }
+}
+
+template<typename dType>
+void decoder_model_wrapper<dType>::before_target_vocab_shrink(){
+    //
+    if (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2){
+        
+        softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
+        
+        d_softmax_original_D = softmax->d_D;
+        softmax->d_D = d_D_shrink;
+        
+        d_softmax_original_b = softmax->d_b_d;
+        softmax->d_b_d = d_b_shrink;
+        
+        softmax->output_vocab_size = new_output_vocab_size;
+    }
+}
+
+template<typename dType>
+void decoder_model_wrapper<dType>::after_target_vocab_shrink(){
+    // reset the parameters;
+    if (p_params->target_vocab_policy == 1 || p_params->target_vocab_policy == 2){
+        if (show_shrink_debug){
+            std::cout << "outputdist\n";
+            print_eigen_matrix(outputdist);
+        }
+        softmax_layer<dType> *softmax = dynamic_cast<softmax_layer<dType>*>(model->softmax);
+        softmax->d_D = d_softmax_original_D;
+        softmax->d_b_d = d_softmax_original_b;
+        softmax->output_vocab_size = target_vocab_size;
+    }
+}
+
+
+
+
 
 template<typename dType>
 void decoder_model_wrapper<dType>::forward_prop_source() {
 	model->forward_prop_source(d_input_vocab_indicies_source,d_input_vocab_indicies_source_bi,d_ones,source_length,source_length_bi,LSTM_size,
 		d_char_vocab_indicies_source);
 	model->source_length = source_length;
+    
 }
 
 
@@ -230,14 +399,42 @@ void decoder_model_wrapper<dType>::forward_prop_target(int curr_index,int *h_cur
 	//copy the outputdist to CPU
 	cudaDeviceSynchronize();
 	CUDA_GET_LAST_ERROR("ERROR ABOVE!!");
-	CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),target_vocab_size*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
 	//copy the outputdist to eigen from CPU
-	copy_dist_to_eigen(h_outputdist,outputdist);
+    
+    if (this->target_vocab_policy == 3) { // LSH_WTA
+        this->nnz = this->model->softmax->get_nnz();
+        model->timer.start("copy_h_outputdist");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),this->nnz*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
+        model->timer.end("copy_h_outputdist");
+        model->timer.start("copy_dist_to_eigen");
+        copy_dist_to_eigen(h_outputdist,outputdist, this->nnz);
+        model->timer.end("copy_dist_to_eigen");
+    }
+    else {
+        model->timer.start("copy_h_outputdist");
+        CUDA_ERROR_WRAPPER(cudaMemcpy(h_outputdist,model->softmax->get_dist_ptr(),outputdist.rows()*beam_size*sizeof(dType),cudaMemcpyDeviceToHost),"forward prop target decoder 2\n");
+        model->timer.end("copy_h_outputdist");
+        model->timer.start("copy_dist_to_eigen");
+        copy_dist_to_eigen(h_outputdist,outputdist);
+        model->timer.end("copy_dist_to_eigen");
+
+    }
 
 	if (BZ_CUDA::unk_replacement) {
 		viterbi_alignments_ind = BZ_CUDA::viterbi_alignments;
 		viterbi_alignments_scores = BZ_CUDA::alignment_scores;
 	}
+}
+
+template<typename dType>
+template<typename Derived>
+void decoder_model_wrapper<dType>::copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz) {
+    UNCONST(Derived,outputdist_const,outputdist);
+    for(int i=0; i < nnz; i++) {
+        for(int j=0; j < outputdist.cols(); j++) {
+            outputdist(i,j) = h_outputdist[IDX2C(i,j,nnz)];
+        }
+    }
 }
 
 

@@ -18,6 +18,7 @@
 #include <limits>
 #include "Input_To_Hidden_Layer.h"
 #include "Hidden_To_Hidden_Layer.h"
+#include "memory_util.h"
 
 template<typename dType>
 class Input_To_Hidden_Layer;
@@ -117,6 +118,8 @@ public:
 	bool char_cnn = false;
 	char_cnn_params char_params;
 
+    Timer timer;
+    
 	///////////////////////////////////Methods for the class//////////////////////////////////////////////
 
 	neuralMT_model() {};
@@ -206,6 +209,11 @@ public:
 	void target_copy_prev_states(int LSTM_size, int beam_size);
 
 	void dump_alignments(int target_length,int minibatch_size,int *h_input_vocab_indicies_source,int *h_input_vocab_indicies_target,int *h_input_vocab_indicies_source_2);
+    
+    // for fsa line
+    void get_chts(std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>> &chts, int beam_index, int beam_size);
+    
+    void set_chts(const std::vector<Eigen::Matrix<dType, Eigen::Dynamic,1>>& chts, int beam_size);
 };
 
 #endif

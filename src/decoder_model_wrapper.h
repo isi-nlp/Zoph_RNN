@@ -54,12 +54,41 @@ public:
 	std::vector<int> viterbi_alignments_ind; //individual viterbi alignments before voting
 	std::vector<dType> viterbi_alignments_scores; //individual viterbi scores
 
+    // for shrink the target set vocab;
+    dType *d_D_shrink;
+    dType *d_softmax_original_D; // a pointer to refer the d_D in original softmax;
+    dType *d_b_shrink;
+    dType *d_softmax_original_b;
+    int new_output_vocab_size = 0;
+    int *h_new_vocab_index;
+    int *d_new_vocab_index;
+    // for policy 1
+    bool show_shrink_debug = false;
+    bool policy_1_done = false;
+    // for policy 2
+    int *h_alignments; // [cap+1, source_vocab_size]
+    int *d_alignments;
+    int cap = 0;
+    
+    // for LSH
+    int nnz = 0;
+    int target_vocab_policy = 0;
+
+    
+    global_params * p_params;
+    
+    
 	decoder_model_wrapper() {};
 	decoder_model_wrapper(int gpu_num,int beam_size,
 		std::string main_weight_file,std::string multi_src_weight_file,std::string main_integerized_file,
 		std::string multi_src_integerized_file,int longest_sent,global_params &params);
 	void extract_model_info(std::string weights_file_name); //get how many layers, hiddenstate size, vocab sizes, etc
 	void memcpy_vocab_indicies();
+    void prepare_target_vocab_set();
+    
+    void before_target_vocab_shrink();
+    void after_target_vocab_shrink();
+    
 	void forward_prop_source();
 	void forward_prop_target(int curr_index,int *h_current_indicies);
 
@@ -71,6 +100,10 @@ public:
 	template<typename Derived>
 	void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
 
+    template<typename Derived>
+    void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz);
+
+    
 	void target_copy_prev_states();
 };
 

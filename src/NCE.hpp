@@ -1046,4 +1046,14 @@ void NCE_layer<dType>::check_gradient_GPU_SPARSE(dType epsilon,dType *d_mat,dTyp
 	}
 }
 
+template<typename dType>
+int NCE_layer<dType>::get_nnz(){
+    return -1;
+}
+
+template<typename dType>
+int* NCE_layer<dType>::get_h_rowIdx(){
+    return NULL;
+}
+
 

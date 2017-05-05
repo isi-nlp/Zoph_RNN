@@ -13,7 +13,7 @@ template<typename dType>
 class base_loss_layer {
 public:
 
-
+    
 	virtual softmax_layer_gpu_info gpu_init(int device_number) = 0;
 
 	virtual void init_loss_layer(struct neuralMT_model<precision> *model,global_params &params) = 0;
@@ -57,6 +57,10 @@ public:
 	virtual void get_distribution_GPU_decoder_wrapper() = 0;
 
 	virtual dType *get_dist_ptr() = 0;
+    
+    virtual int get_nnz() = 0 ;
+    
+    virtual int* get_h_rowIdx() = 0;
 };
 
 
