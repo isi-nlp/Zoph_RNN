@@ -52,5 +52,6 @@ def generate_train_valid():
     generate_fn_pairs(100,"source.valid.txt","target.valid.txt")
     generate_fn_pairs(1,"source.test.txt","target.test.txt")
 
+generate_fsa()
 generate_train_valid()
 
