@@ -1,9 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #PBS -q isi
 #PBS -l walltime=1:00:00
 #PBS -l gpus=2
 
-ROOT=../../ # change your ROOT to some absolute path
+SCRIPTDIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
+ROOT=$SCRIPTDIR/../../
 
 EXEC=$ROOT/executable/ZOPH_RNN_XING
 
@@ -33,7 +34,7 @@ FR_TRN=$data_folder/train_french.txt.tok.lc.10k
 # output
 
 output_folder=$ROOT/scripts/translate/Fre_Eng_lc_d_att/decode
-mkdir $output_folder
+mkdir -p $output_folder
 
 id=FE
 LOG=$output_folder/${id}.log
@@ -45,7 +46,7 @@ BLEU=$output_folder/${id}.bleu
 
 cd $output_folder
 
-$EXEC --decode-main-data-files $SRC_TST -b 12 -L 100 -k 1 $fe_nn_attention $OUTPUT  > $LOG
+$EXEC --decode-main-data-files $SRC_TST -b 12 -L 100 -k 1 $fe_nn_attention $OUTPUT --logfile $LOG
 
 # calculate BLEU
 

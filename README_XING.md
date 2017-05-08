@@ -15,10 +15,10 @@ All the following papers are based on this code:
 The source code is provided in `src/` directory. You can compile the code into a standalone executable by:
 
 ```
-bash script/compile.xing.sh
+bash scripts/compile.xing.sh
 ```
 
-The executable `ZOPH_RNN_XING` will appear in the root folder. An pre-compiled executable `ZOPH_RNN_XING` is in folder `executable\`.
+The executable `ZOPH_RNN_XING` will appear in the root folder. A pre-compiled executable `ZOPH_RNN_XING` is in folder `executable\`.
 
 You should set the 7 environment variables and have the required libraries mentioned in `README.md` before compilation.
 Two additional requirements:
