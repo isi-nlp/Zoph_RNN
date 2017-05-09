@@ -539,8 +539,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
             BZ_CUDA::logger << (int)cont_train.size() << "\n";
             BZ_CUDA::logger << "ERROR: two arguements to be supplied to the continue train flag\n"\
                 " 1. train data file name, 2. neural network file name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -562,8 +560,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
           if(cont_train.size()!=3) {
             BZ_CUDA::logger << "ERROR: three arguements to be supplied to the continue train flag\n"\
                 " 1. source train data file name  2. target train data file name  3. neural network file name  \n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -578,8 +574,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
           if(params.source_file_name == params.target_file_name) {
             BZ_CUDA::logger << "ERROR: do not use the same file for source and target data\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -618,8 +612,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
           if(train_files.size()!=2) {
             BZ_CUDA::logger << "ERROR: two arguements to be supplied to the train flag"\
                 " 1. train data file name, 2. neural network output name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -653,10 +645,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
 
 
-          //clean up if error
           if(!success) {
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
         }
@@ -666,8 +655,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
             BZ_CUDA::logger << (int)train_files.size() <<"\n";
             BZ_CUDA::logger << "ERROR: three arguements to be supplied to the train flag for the sequence to sequence model\n"\
                 " 1. source train data file name\n 2. target train data file name \n3. neural network output name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -678,8 +665,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
           if(params.source_file_name == params.target_file_name) {
             BZ_CUDA::logger << "ERROR: do not use the same file for source and target data\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -732,10 +717,7 @@ void command_line_parse(global_params &params,int argc, char **argv) {
             }
           }
 
-          //clean up if error
           if(!success) {
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
         }
@@ -745,8 +727,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
         if(lower_upper_range.size()!=2) {
           BZ_CUDA::logger << "ERROR: you must have two inputs to parameter-range\n1.lower bound\n2. upper bound\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
 
@@ -754,8 +734,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         BZ_CUDA::upper = lower_upper_range[1];
         if(BZ_CUDA::lower >= BZ_CUDA::upper) {
           BZ_CUDA::logger << "ERROR: the lower parameter range cannot be greater than the upper range\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
       }
@@ -768,8 +746,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         params.google_learning_rate = true;
         if(params.epoch_to_start_halving<=0) {
           BZ_CUDA::logger << "ERROR: cannot halve learning rate until 1st epoch \n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
       }
@@ -779,8 +755,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         if(vm.count("sequence")) {
           if(adaptive_learning_rate.size()!=1) {
             BZ_CUDA::logger << "ERROR: adaptive-halve-lr takes one arguement\n1.dev file name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
           params.dev_target_file_name = adaptive_learning_rate[0];
@@ -796,15 +770,11 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         else {
           if(adaptive_learning_rate.size()!=2 && !params.multi_src_params.multi_source) {
             BZ_CUDA::logger << "ERROR: adaptive-halve-lr takes two arguements\n1.source dev file name\n2.target dev file name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
           if(adaptive_learning_rate.size()!=3 && params.multi_src_params.multi_source) {
             BZ_CUDA::logger << "ERROR: adaptive-halve-lr takes three arguements with multi-source\n1.source dev file name\n2.target dev file name\n3.other source dev file name\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -824,8 +794,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
           if(params.dev_source_file_name == params.dev_target_file_name) {
             BZ_CUDA::logger << "ERROR: do not use the same file for source and target data\n";
-            boost::filesystem::path temp_path(params.unique_dir);
-            boost::filesystem::remove_all(temp_path);
             exit (EXIT_FAILURE);
           }
 
@@ -850,8 +818,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         params.truncated_softmax = true;
         if(params.shortlist_size + params.sampled_size > params.target_vocab_size) {
           BZ_CUDA::logger << "ERROR: you cannot have shortlist size + sampled size >= target vocab size\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
       }
@@ -1082,8 +1048,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
       if(vm.count("multi-gpu")) {
         if(gpu_indicies.size()!=params.model_names.size()) {
           BZ_CUDA::logger << "ERROR: for decoding, each model must be specified a gpu\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
         params.gpu_indicies = gpu_indicies;
@@ -1096,14 +1060,10 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
       if(params.beam_size<=0) {
         BZ_CUDA::logger << "ERROR: beam size cannot be <=0\n";
-        boost::filesystem::path temp_path(params.unique_dir);
-        boost::filesystem::remove_all(temp_path);
         exit (EXIT_FAILURE);
       }
       if(params.penalty<0) {
         BZ_CUDA::logger << "ERROR: penalty cannot be less than zero\n";
-        boost::filesystem::path temp_path(params.unique_dir);
-        boost::filesystem::remove_all(temp_path);
         exit (EXIT_FAILURE);
       }
 
@@ -1116,16 +1076,12 @@ void command_line_parse(global_params &params,int argc, char **argv) {
           BZ_CUDA::logger << "Decoding ratio size: " << (int)decoding_ratio.size() << "\n";
           BZ_CUDA::logger << decoding_ratio[0] << "\n";
           BZ_CUDA::logger << "ERROR: only two inputs for decoding ratio\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
         params.min_decoding_ratio = decoding_ratio[0];
         params.max_decoding_ratio = decoding_ratio[1];
         if(params.min_decoding_ratio >= params.max_decoding_ratio) {
           BZ_CUDA::logger << "ERROR: min decoding ratio must be <= max_decoding_ratio\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
       }
@@ -1149,8 +1105,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         if(test_files.size()!=3) {
           BZ_CUDA::logger << "ERROR: force-decode takes three arguements 1.input file name (input sentences)"\
               "2. neural network file name 3.output file name \n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
 
@@ -1170,8 +1124,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
         if(test_files.size()!=4) {
           BZ_CUDA::logger << "ERROR: force-decode takes four arguements: 1. source input file"\
               " 2. target input file  3. neural network file name 4. output file name\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
 
@@ -1186,8 +1138,6 @@ void command_line_parse(global_params &params,int argc, char **argv) {
 
         if(params.source_file_name == params.target_file_name) {
           BZ_CUDA::logger << "ERROR: do not use the same file for source and target data\n";
-          boost::filesystem::path temp_path(params.unique_dir);
-          boost::filesystem::remove_all(temp_path);
           exit (EXIT_FAILURE);
         }
 
@@ -1622,12 +1572,12 @@ int main(int argc, char **argv) {
 
   ///////////////////////////////////////////decode the model////////////////////////////////////////////
   if(params.decode) {
+
     //std::cout << "-----------------Starting Decoding----------------\n";
     ensemble_factory<precision> ensemble_decode(params.model_names,params.num_hypotheses,params.beam_size, params.min_decoding_ratio,
                                                 params.penalty, params.longest_sent,params.print_score,
                                                 params.decoder_output_file,params.gpu_indicies,params.max_decoding_ratio,
                                                 params.target_vocab_size,params);
-        
     if (params.fsa_file != ""){
       fsa* fsa_model = new fsa(params.fsa_file);
       input_file_prep input_helper;
@@ -1646,7 +1596,7 @@ int main(int argc, char **argv) {
       ensemble_decode.model_decoder->init_encourage_lists(params.encourage_list, params.encourage_weight);
             
     }
-        
+
     begin_decoding = std::chrono::system_clock::now();
 
     BZ_CUDA::logger << "-----------------Starting Decoding----------------\n";
@@ -1660,19 +1610,16 @@ int main(int argc, char **argv) {
     input_file_prep input_helper;
     //use model_names[0] since all models must have the same target vocab mapping and size
     input_helper.unint_file(params.model_names[0],params.decoder_output_file,params.decoder_final_file,false,true);
+    if(BZ_CUDA::unk_replacement) {
+      BZ_CUDA::unk_rep_file_stream.close();
+    }
   }
 
-
-
-  //remove the temp directory created
-  if(params.unique_dir!="NULL") {
-    boost::filesystem::path temp_path(params.unique_dir);
-    //boost::filesystem::remove_all(temp_path);
-  }
 
   //Compute the final runtime
   end_total = std::chrono::system_clock::now();
   elapsed_seconds = end_total-start_total;
+
   BZ_CUDA::logger << "\n\n\n";
   BZ_CUDA::logger << "Total Program Runtime: " << (double)elapsed_seconds.count()/60.0 << " minutes" << "\n";
 }
