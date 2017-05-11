@@ -36,6 +36,7 @@ public:
                    dType penalty, int longest_sent,bool print_score,std::string decoder_output_file,
                    std::vector<int> gpu_nums,dType max_decoding_ratio, int target_vocab_size,global_params &params);
   ~ensemble_factory() {
+    //BZ_CUDA::logger << "Destructing ensemble_factory\n";
     delete model_decoder;
   }
   void init_index_swapping(); //pass in the master for swapping around

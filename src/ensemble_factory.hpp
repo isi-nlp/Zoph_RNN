@@ -32,21 +32,22 @@ ensemble_factory<dType>::ensemble_factory(std::vector<std::string> weight_file_n
   model_decoder->print_beam = params.print_beam;
     
   //initialize all of the models
+  models.reserve(weight_file_names.size());
   for(int i=0; i < weight_file_names.size(); i++) {
     // avoid the deleting-temporaries behavior of push_back
     // emplace_back passes arguments on to the object constructor. For reference, the original
     // push back is left below in comments.
-
     models.emplace_back(gpu_nums[i],beam_size,params.model_names[i],params.model_names_multi_src[i],
-			params.decode_temp_files[i],params.decode_temp_files_additional[i],longest_sent,params);
-    // models.push_back( decoder_model_wrapper<dType>(gpu_nums[i],beam_size,params.model_names[i],params.model_names_multi_src[i],
-    //                                                params.decode_temp_files[i],params.decode_temp_files_additional[i],longest_sent,params));
+                        params.decode_temp_files[i],params.decode_temp_files_additional[i],longest_sent,params);
+    //models.push_back( decoder_model_wrapper<dType>(gpu_nums[i],beam_size,params.model_names[i],params.model_names_multi_src[i],
+    //                                               params.decode_temp_files[i],params.decode_temp_files_additional[i],longest_sent,params));
 
   }
 
 
   //check to be sure all models have the same target vocab size and vocab indicies and get the target vocab size
   this->target_vocab_size = models[0].target_vocab_size;
+  // TODO: i not used; something seems wrong here...
   for(int i=0; i< models.size(); i++) {
     if(models[0].target_vocab_size != target_vocab_size) {
       BZ_CUDA::logger << "ERROR: The target vocabulary sizes are not all the same for the models you wanted in your ensemble\n";
@@ -598,10 +599,12 @@ void ensemble_factory<dType>::decode_file_batch() {
       models[0].model->timer.start("forward_target");
       if (p_params->target_vocab_policy == 2){
         // mapping current indicies
+        // JM: single model assumption?
         for (int i = 0; i<models[0].beam_size; i++){
           int mapped_index = model_decoder->h_current_indices[i];
           model_decoder->h_current_indices_original[i] = models[0].h_new_vocab_index[mapped_index];
         }
+
         for(int j=0; j < models.size(); j++) {
           // do current d
           models[j].forward_prop_target(curr_index,model_decoder->h_current_indices_original);
@@ -621,7 +624,7 @@ void ensemble_factory<dType>::decode_file_batch() {
       //now ensemble the models together
       //this also does voting for unk-replacement
       //	BZ_CUDA::logger << "Source length: " << source_length << "\n";
-            
+
       models[0].model->timer.start("ensembles_models");
       ensembles_models();
       models[0].model->timer.end("ensembles_models");
@@ -637,11 +640,13 @@ void ensemble_factory<dType>::decode_file_batch() {
         model_decoder->h_rowIdx = temp;
       }
 			
+      // TODO: this change looks suspicious; model 0 assumption...
       model_decoder->expand_hypothesis(*p_outputdist,curr_index,BZ_CUDA::viterbi_alignments,models[0].h_outputdist);
 
       models[0].model->timer.end("expand");
             
       models[0].model->timer.start("swap_decoding_states");
+
 
       //swap the decoding states
       for(int j=0; j<models.size(); j++) {
@@ -678,7 +683,6 @@ void ensemble_factory<dType>::decode_file_batch() {
     } else {
 
       for(int j=0; j < models.size(); j++) {
-            
         models[j].forward_prop_target(last_index+1,model_decoder->h_current_indices);
       }
     }

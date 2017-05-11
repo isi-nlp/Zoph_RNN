@@ -1609,8 +1609,10 @@ int main(int argc, char **argv) {
     //now unintegerize the file
     input_file_prep input_helper;
     //use model_names[0] since all models must have the same target vocab mapping and size
+    //BZ_CUDA::logger << "Uninting file\n";
     input_helper.unint_file(params.model_names[0],params.decoder_output_file,params.decoder_final_file,false,true);
     if(BZ_CUDA::unk_replacement) {
+      //BZ_CUDA::logger << "Closing unk rep file stream\n";
       BZ_CUDA::unk_rep_file_stream.close();
     }
   }

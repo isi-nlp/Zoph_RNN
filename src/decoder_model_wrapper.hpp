@@ -202,7 +202,9 @@ void decoder_model_wrapper<dType>::memcpy_vocab_indicies() {
   //	BZ_CUDA::logger << "source sentence length: " << source_length << "\n";
   //	BZ_CUDA::logger << "source sentence multi-source length: " << source_length_bi << "\n";
 
+
   cudaSetDevice(gpu_num);
+
 
   CUDA_ERROR_WRAPPER(cudaMemcpy(d_input_vocab_indicies_source,fileh->h_input_vocab_indicies_source,source_length*sizeof(int),cudaMemcpyHostToDevice),"decoder memcpy_vocab_indicies 1\n");
 
