@@ -10,7 +10,8 @@ class neuralMT_model;
 template<typename dType>
 class decoder_model_wrapper {
 public:
-	int gpu_num;
+
+    int gpu_num;
 	int *d_ones; //vector of all ones, used for forward prop in beam search, on GPU
 	dType *h_outputdist;
 	dType *d_temp_swap_vals;
@@ -74,41 +75,55 @@ public:
     int *d_alignments;
     int cap = 0;
     
-    // for LSH
-    int nnz = 0;
-    int target_vocab_policy = 0;
+  // for LSH
+  int nnz = 0;
+  int target_vocab_policy = 0;
 
     
-    global_params * p_params;
+  global_params * p_params;
     
     
-	decoder_model_wrapper() {};
-	decoder_model_wrapper(int gpu_num,int beam_size,
-		std::string main_weight_file,std::string multi_src_weight_file,std::string main_integerized_file,
-		std::string multi_src_integerized_file,int longest_sent,global_params &params);
-	void extract_model_info(std::string weights_file_name); //get how many layers, hiddenstate size, vocab sizes, etc
-	void memcpy_vocab_indicies();
-    void prepare_target_vocab_set();
+  decoder_model_wrapper() {};
+  ~decoder_model_wrapper() {
+    delete fileh;
+    delete model;
+    if(multi_src_integerized_file != "NULL") {
+      delete fileh_multi_src;
+    }
+  };
+  decoder_model_wrapper(int gpu_num,int beam_size,
+                        std::string main_weight_file,std::string multi_src_weight_file,std::string main_integerized_file,
+                        std::string multi_src_integerized_file,int longest_sent,global_params &params);
+  void extract_model_info(std::string weights_file_name); //get how many layers, hiddenstate size, vocab sizes, etc
+  void memcpy_vocab_indicies();
+  void prepare_target_vocab_set();
     
-    void before_target_vocab_shrink();
-    void after_target_vocab_shrink();
+  void before_target_vocab_shrink();
+  void after_target_vocab_shrink();
     
-	void forward_prop_source();
-	void forward_prop_target(int curr_index,int *h_current_indicies);
+  void forward_prop_source();
+  void forward_prop_target(int curr_index,int *h_current_indicies);
 
 
-	template<typename Derived>
-	void swap_decoding_states(const Eigen::MatrixBase<Derived> &indicies,int index);
+  template<typename Derived>
+      void swap_decoding_states(const Eigen::MatrixBase<Derived> &indicies,int index);
 
-	//copy h_outputdist to eigen
-	template<typename Derived>
-	void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
+  //copy h_outputdist to eigen
+  template<typename Derived>
+      void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const);
 
-    template<typename Derived>
-    void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz);
+  template<typename Derived>
+      void copy_dist_to_eigen(dType *h_outputdist,const Eigen::MatrixBase<Derived> &outputdist_const, int nnz);
 
     
-	void target_copy_prev_states();
+  void target_copy_prev_states();
+ private:
+  // prohibiting copying, per 
+  // http://stackoverflow.com/questions/9331561/why-does-my-classs-destructor-get-called-when-i-add-instances-to-a-vector
+  // TODO: why can't this exist for emplace?
+  //decoder_model_wrapper(const decoder_model_wrapper&); // copy constructor
+  decoder_model_wrapper& operator=(const decoder_model_wrapper&); // assign operator
+
 };
 
 

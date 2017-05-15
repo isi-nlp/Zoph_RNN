@@ -23,7 +23,7 @@ PATH_TO_CUDNN_V4_64=${PATH_TO_CUDNN_V4_64:-"/home/nlg-05/zoph/cudnn_v4/lib64/"}
 PATH_TO_EIGEN=${PATH_TO_EIGEN:-"/home/nlg-05/zoph/eigen/"}
 PATH_TO_CUDNN_INCLUDE=${PATH_TO_CUDNN_INCLUDE:-"/home/nlg-05/zoph/cudnn_v4/include/"}
 
-#complie
+#compile
 
 #-DTIMER_DEBUG
 nvcc -DCUDNN_STATIC -O3 -arch=sm_35 \
