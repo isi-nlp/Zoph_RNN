@@ -71,7 +71,9 @@ decoder_model_wrapper<dType>::decoder_model_wrapper(int gpu_num,int beam_size,
 
 	//allocate the current indicies
 	CUDA_ERROR_WRAPPER(cudaMalloc((void**)&d_current_indicies,beam_size*sizeof(int)),"GPU memory allocation failed\n");
-
+    h_current_indices = (int *) malloc(beam_size*sizeof(int));
+    
+    
 	model = new neuralMT_model<dType>();
 	//initialize the model
 	model->initModel_decoding(LSTM_size,beam_size,source_vocab_size,target_vocab_size,

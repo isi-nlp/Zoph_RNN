@@ -41,10 +41,20 @@ $EXEC -k 10 best.nn kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-bea
 # the command line should contains --fsa <fsa_file> and --decode-main-data-files <source_file>, both fsa_file and source_file should exist and are valid fsa_file and source file, although you don't really use them in the interactive mode.
 
 # [Interactive-line mode] : --interactive 1 --interactive-line 1
-$EXEC -k 10 best.nn kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-beam 1 --decode-main-data-files source.valid.txt --interactive-line 1 --interactive-line 1
+$EXEC -k 10 best.nn kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-beam 1 --decode-main-data-files source.valid.txt --interactive-line 1 --interactive 1
+
+# 1. `source <source_file>` : process the source-side forward propagation.
+# 2. `words word1 word2 word3` feed the target-side RNN with words sequence `word1 owrd2 word3`. This is supposed to be the line that human composed. 
+# 3. `fsaline <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0` Let the RNN to continue decode with FSA.
 
 
+# [Interactive-line mode + ensemble ] : --interactive 1 --interactive-line 1
+$EXEC -k 10 best.nn best.nn kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-beam 1 --decode-main-data-files source.valid.txt source.valid.txt --interactive-line 1 --interactive 1
 
+# 1. `source <source_file>` : process the source-side forward propagation.
+# 2. `words word1 word2 word3` feed the target-side RNN with words sequence `word1 owrd2 word3`. This is supposed to be the line that human composed. 
+# 3. `words_ensemble word11 word12 word13 ___sep___ word21 word22 word23 ___sep___` feed the target-side RNN with words sequence `word11 owrd12 word13` for `best.nn.1` and `word21 word22 word23` for `best.nn.2` This is supposed to be the line that human composed. 
+# 4. `fsaline <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0` Let the RNN to continue decode with FSA.
 
 
 

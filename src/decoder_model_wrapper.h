@@ -15,7 +15,11 @@ public:
 	dType *h_outputdist;
 	dType *d_temp_swap_vals;
 	int *d_input_vocab_indicies_source;
-	int *d_current_indicies; 
+	int *d_current_indicies;
+    
+    int *h_current_indices; // every model should have this vector for model ensemble; 
+    
+    
 
 	neuralMT_model<dType> *model; //This is the model
 

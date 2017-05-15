@@ -134,10 +134,20 @@ $EXEC -k 10 best.nn kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-bea
 You can choose one of the following three commend to type in STDIN:
 
 1. `source <source_file>` : process the source-side forward propagation.
-2. `words word1 word2 word3` feed the target-side RNN with words sequence `word1 owrd2 word3`. This is supposed to be the line that human composed. 
+2. `words word1 word2 word3` feed the target-side RNN with words sequence `word1 owrd2 word3`. This is supposed to be the line that human composed.
 3. `fsaline <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0` Let the RNN to continue decode with FSA.
 
 Both step 2 and 3 will start from the previous hidden states and cell states of target-side RNN.
+
+You can also ensemble two models `best.nn.1` and `best.nn.2` by:
+
+```
+$EXEC -k 10 best.nn.1 best.nn.2 kbest_fsa.txt --print-score 1 -b 5 --fsa fsa.txt --print-beam 1 --decode-main-data-files source.valid.txt source.valid.txt --interactive-line 1 --interactive 1
+```
+
+and addtionally, you can use `words_ensemble` option to provide two different human inputs for the two models:
+
+4. `words_ensemble word11 word12 word13 ___sep___ word21 word22 word23 ___sep___` feed the target-side RNN with words sequence `word11 owrd12 word13` for `best.nn.1` and `word21 word22 word23` for `best.nn.2` These are supposed to be the lines human composed. 
 
 # Decoding with Word Alignment
 

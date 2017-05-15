@@ -77,16 +77,24 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
     // both of the two funcs needs to prepare the follwing two things:
     // 1. init the pre_target_states.c_t_pre/h_t_pre as h_2 ( h2 = lstm(w2,h1) )
     // 2. init the h_current_indicies = [w3] * beam_size;
+    // 3. Now, we can ensemble different model, so each models[i] has a h_current_indices: it will records the h_current_indices before and after each function call:
+    /*
+        {nothing} -> source -> {models[i].h_current_indices = model_decoder.h_current_indices}
+        {model_decoder.h_current_indices = models[i].h_current_indices } -> words -> {models[i].h_current_indices = model_decoder.h_current_indices}
+        {model_decoder.h_current_indices = models[i].h_current_indices } -> words_ensemble -> {models[i].h_current_indices = model_decoder.h_current_indices}
+        {model_decoder.h_current_indices = models[i].h_current_indices } -> fsaline -> {models[i].h_current_indices = model_decoder.h_current_indices}
+     */
     
 
     while (true) {
         // 1. source <source_file>  -> [END]
         // 2. words <words> -> [END]
-        // 3. fsa <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0 -> [END] : as normal
+        // 2. words_ensemble <words> ___sep___ <words> ___sep___  -> [END]
+        // 3. (removed )fsa <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0 -> [END] : as normal
         // 4. fsaline <fsa_file> encourage_list_files:enc1.txt,enc2.txt encourage_weights:1.0,-1.0 repetition:0.0 alliteration:0.0 wordlen:0.0 -> [END]: as noraml, but at the end, move corresponding ct and ht to all beams.
         
         
-        std::cout<<"Please input <source/words/fsa/fsaline> <source_file/words/fsa_file>\n";
+        std::cout<<"Please input <source/words/words_ensemble/fsaline> <source_file/words/words seperated by ___sep___/fsa_file>\n";
         std::cout.flush();
         // read input
         // input format:
@@ -137,6 +145,13 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             for(int j=0; j < models.size(); j++) {
                 models[j].forward_prop_source();
             }
+            
+            //copy model_decoder->h_current_indicies to each model's h_current_indicies;
+            for(int j=0; j < models.size(); j++) {
+                for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                    models[j].h_current_indices[k] = model_decoder->h_current_indices[k];
+                }
+            }
 
             std::cout<<"[END]\n";
             std::cout.flush();
@@ -164,14 +179,23 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
                 word_indices.push_back(word_index);
             }
             
-            
-            
-            for (int i = 0; i< word_indices.size() ; i ++){
-                
+            // init model_decoder->h_current_indices with each modle's h_current_indices;
+            for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                model_decoder->h_current_indices[k] = models[0].h_current_indices[k] ;
+            }
 
-                std::cout<< "WI: "<< model_decoder->h_current_indices[0] << "\n";
-                
+            for (int i = 0; i< word_indices.size() ; i ++){
+            
                 for(int j=0; j < models.size(); j++) {
+                    if (i == 0){
+                        // for words_ensemble, different model have different h_current_indices;
+                        for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                            model_decoder->h_current_indices[k] = models[j].h_current_indices[k] ;
+                        }
+                    }
+                    
+                    std::cout<< "WI["<<j<<"]: "<< model_decoder->h_current_indices[0] << "\n";
+
                     models[j].forward_prop_target(curr_index+i,model_decoder->h_current_indices);
                     models[j].target_copy_prev_states();
                 }
@@ -182,6 +206,77 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
                     model_decoder->h_current_indices[j] = word_index;
                 }
 
+            }
+            
+            // update each modle's h_current_indices with model_decoder->h_current_indices;
+            for(int j=0; j < models.size(); j++) {
+                for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                    models[j].h_current_indices[k] = model_decoder->h_current_indices[k];
+                }
+            }
+            
+            std::cout<<"[END]\n";
+            std::cout.flush();
+            
+            right_after_encoding = false;
+            
+        } else if (action == "words_ensemble"){
+            std::vector<std::vector<int>> word_indices_array;
+            for (int i = 0; i< models.size(); i++){
+                std::vector<int> temp;
+                word_indices_array.push_back(temp);
+            }
+            
+            int curr_index = 0;
+            
+            if (right_after_encoding){
+                curr_index = 0;
+            } else {
+                curr_index = 1;
+            }
+            
+            int i_sentence = 0;
+            for (int i = 1; i < ll.size(); i +=1 ){
+                std::string word = ll[i];
+                if (word == "___sep___"){
+                    i_sentence+=1;
+                    continue;
+                }
+                int word_index = 2; // <UNK>
+                if (model_decoder->tgt_mapping.count(word) > 0){
+                    word_index = model_decoder->tgt_mapping[word];
+                }
+                word_indices_array[i_sentence].push_back(word_index);
+            }
+            
+            for (int j=0; j < word_indices_array.size(); j += 1){
+                std::vector<int> & word_indices = word_indices_array[j];
+                
+                // init model_decoder->h_current_indices with each modle's h_current_indices;
+                for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                    model_decoder->h_current_indices[k] = models[j].h_current_indices[k] ;
+                }
+                
+                for (int i = 0; i< word_indices.size() ; i ++){
+                    
+                    
+                    std::cout<< "WI["<<j<<"]: "<< model_decoder->h_current_indices[0] << "\n";
+                    
+                    models[j].forward_prop_target(curr_index+i,model_decoder->h_current_indices);
+                    models[j].target_copy_prev_states();
+                    
+                    int word_index = word_indices[i];
+                    
+                    for (int j=0 ; j< model_decoder->beam_size; j++){
+                        model_decoder->h_current_indices[j] = word_index;
+                    }
+                    
+                }
+                
+                // update each modle's h_current_indices with model_decoder->h_current_indices;
+                for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                    models[j].h_current_indices[k] = model_decoder->h_current_indices[k];
+                }
                 
             }
             
@@ -190,8 +285,8 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             std::cout.flush();
             
             right_after_encoding = false;
-            
-        } else if (action == "fsa") {
+        
+        } /*else if (action == "fsa") {
             fsa_file = ll[1];
             
             model_decoder->init_fsa_interactive(fsa_file);
@@ -237,10 +332,8 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             //process wordlen weight
             model_decoder->wordlen_weight = wordlen_weight;
 
-            
-            
             decode_file_line(right_after_encoding,false);
-            
+           
             //read output and print into stdout;
             input_file_prep input_helper;
             input_helper.unint_file(p_params->model_names[0],p_params->decoder_output_file,p_params->decoder_final_file,false,true);
@@ -264,7 +357,7 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
             right_after_encoding = false;
             
             
-        } else if (action == "fsaline") {
+        } */ else if (action == "fsaline") {
             
             fsa_file = ll[1];
             
@@ -343,7 +436,7 @@ void ensemble_factory<dType>::decode_file_interactive_line() {
 
 template<typename dType>
 void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool end_transfer) {
-    // right_after_encoding = true, means the system is never decoding a word,
+    // right_after_encoding = true, means the system hasn't decoded a word,
     //
     bool pre_end_transfer = model_decoder->end_transfer;
     model_decoder->end_transfer = end_transfer;
@@ -363,7 +456,16 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
         for(int j=0; j < models.size(); j++) {
             // curr_index: whether it's 0 or non-0. Doesn't matter if it's 1 or 2 or 3.
             // &c_t_pre = &pre_state ; c_t = f(c_t_pre)
+            
+            if (curr_index == 0){
+                // for words_ensemble, different model have different h_current_indices;
+                for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+                    model_decoder->h_current_indices[k] = models[j].h_current_indices[k] ;
+                }
+            }
+            
             models[j].forward_prop_target(curr_index+start_index,model_decoder->h_current_indices);
+            
         }
         
         
@@ -403,6 +505,15 @@ void ensemble_factory<dType>::decode_file_line(bool right_after_encoding, bool e
     model_decoder->output_k_best_hypotheses(models[0].fileh->sentence_length);
     //model_decoder->print_current_hypotheses();
     model_decoder->end_transfer = pre_end_transfer;
+    
+    // update each modle's h_current_indices with model_decoder->h_current_indices;
+    for(int j=0; j < models.size(); j++) {
+        for (int k = 0; k < model_decoder->beam_size; k += 1 ){
+            models[j].h_current_indices[k] = model_decoder->h_current_indices[k];
+        }
+    }
+
+    
 }
 
 
