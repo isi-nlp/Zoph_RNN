@@ -10,65 +10,70 @@ class neuralMT_model;
 template<typename dType>
 class decoder_model_wrapper {
 public:
-  int gpu_num;
-  int *d_ones; //vector of all ones, used for forward prop in beam search, on GPU
-  dType *h_outputdist;
-  dType *d_temp_swap_vals;
-  int *d_input_vocab_indicies_source;
-  int *d_current_indicies; 
 
-  neuralMT_model<dType> *model; //This is the model
+    int gpu_num;
+	int *d_ones; //vector of all ones, used for forward prop in beam search, on GPU
+	dType *h_outputdist;
+	dType *d_temp_swap_vals;
+	int *d_input_vocab_indicies_source;
+	int *d_current_indicies;
+    
+    int *h_current_indices; // every model should have this vector for model ensemble; 
+    
+    
 
-  file_helper_decoder *fileh; //for file input, so each file can get read in seperately
-  file_helper_decoder *fileh_multi_src; //reads in additional multi-source file
+	neuralMT_model<dType> *model; //This is the model
 
-  int source_length; //current length of the source sentence being decoded
-  int beam_size;
-  int source_vocab_size;
-  int target_vocab_size;
-  int num_layers;
-  int LSTM_size;
-  bool attention_model;
-  bool feed_input;
-  bool combine_LSTM;
-  int num_lines_in_file = -1;
-  int longest_sent;
+	file_helper_decoder *fileh; //for file input, so each file can get read in seperately
+	file_helper_decoder *fileh_multi_src; //reads in additional multi-source file
 
-  bool multi_source = false;
-  int source_length_bi; //current length of the source sentence being decoded
-  int *d_input_vocab_indicies_source_bi;
+	int source_length; //current length of the source sentence being decoded
+	int beam_size;
+	int source_vocab_size;
+	int target_vocab_size;
+	int num_layers;
+	int LSTM_size;
+	bool attention_model;
+	bool feed_input;
+	bool combine_LSTM;
+	int num_lines_in_file = -1;
+	int longest_sent;
 
-  bool char_cnn = false;
-  int *d_char_vocab_indicies_source;
-  int longest_word;
-  std::unordered_map<int,std::vector<int>> word_to_char_map; //for word index, what is the character sequence, this is read from a file
-  int *h_new_char_indicies;
-  int *d_new_char_indicies;
+	bool multi_source = false;
+	int source_length_bi; //current length of the source sentence being decoded
+	int *d_input_vocab_indicies_source_bi;
 
-  std::string main_weight_file;
-  std::string multi_src_weight_file;
-  std::string main_integerized_file;
-  std::string multi_src_integerized_file;
+	bool char_cnn = false;
+	int *d_char_vocab_indicies_source;
+	int longest_word;
+	std::unordered_map<int,std::vector<int>> word_to_char_map; //for word index, what is the character sequence, this is read from a file
+	int *h_new_char_indicies;
+	int *d_new_char_indicies;
 
-  Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> outputdist;
-  std::vector<int> viterbi_alignments_ind; //individual viterbi alignments before voting
-  std::vector<dType> viterbi_alignments_scores; //individual viterbi scores
+	std::string main_weight_file;
+	std::string multi_src_weight_file;
+	std::string main_integerized_file;
+	std::string multi_src_integerized_file;
 
-  // for shrink the target set vocab;
-  dType *d_D_shrink;
-  dType *d_softmax_original_D; // a pointer to refer the d_D in original softmax;
-  dType *d_b_shrink;
-  dType *d_softmax_original_b;
-  int new_output_vocab_size = 0;
-  int *h_new_vocab_index;
-  int *d_new_vocab_index;
-  // for policy 1
-  bool show_shrink_debug = false;
-  bool policy_1_done = false;
-  // for policy 2
-  int *h_alignments; // [cap+1, source_vocab_size]
-  int *d_alignments;
-  int cap = 0;
+	Eigen::Matrix<dType,Eigen::Dynamic, Eigen::Dynamic,Eigen::RowMajor> outputdist;
+	std::vector<int> viterbi_alignments_ind; //individual viterbi alignments before voting
+	std::vector<dType> viterbi_alignments_scores; //individual viterbi scores
+
+    // for shrink the target set vocab;
+    dType *d_D_shrink;
+    dType *d_softmax_original_D; // a pointer to refer the d_D in original softmax;
+    dType *d_b_shrink;
+    dType *d_softmax_original_b;
+    int new_output_vocab_size = 0;
+    int *h_new_vocab_index;
+    int *d_new_vocab_index;
+    // for policy 1
+    bool show_shrink_debug = false;
+    bool policy_1_done = false;
+    // for policy 2
+    int *h_alignments; // [cap+1, source_vocab_size]
+    int *d_alignments;
+    int cap = 0;
     
   // for LSH
   int nnz = 0;

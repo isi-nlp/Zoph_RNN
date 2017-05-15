@@ -1,2 +1,9 @@
-.history
+.DS_Store
 *~
+[#].[#]
+.[#]*
+*[#]
+
+*pyc
+.history
+
